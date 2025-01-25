@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}Bank Points{% endblock %}
+
+{% block content %}
+    <div class="container">
+        <h2>Bank Points for {{ member.name }} ({{ use_year }})</h2>
+
+        <form method="POST">
+            <div class="form-group">
+                <label for="points">Points to Bank:</label>
+                <input type="number"
+                       name="points"
+                       id="points"
+                       min="1"
+                       required
+                       class="form-control">
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="button button-primary">Bank Points</button>
+                <a href="{{ url_for('home') }}" class="button">Cancel</a>
+            </div>
+        </form>
+    </div>
+{% endblock %}

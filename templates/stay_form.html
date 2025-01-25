@@ -1,0 +1,210 @@
+{% extends "base.html" if not request.args.get('modal') else "modal_base.html" %}
+
+{% block title %}{{ 'Edit' if stay else 'New' }} Stay{% endblock %}
+
+{% block content %}
+    <div class="container">
+        <h1>{{ 'Edit' if stay else 'New' }} Stay</h1>
+        <form id="stayForm" method="POST" action="{{ url_for('new_stay') if not stay else url_for('edit_stay', stay_id=stay.id) }}">
+            <div class="form-group">
+                <label for="resort">Resort:</label>
+                <input type="text" id="resort" name="resort" value="{{ stay.resort if stay else '' }}" required>
+            </div>
+
+            <div class="form-group">
+                <label for="check_in">Check-in Date:</label>
+                <input type="date" id="check_in" name="check_in" value="{{ stay.check_in.strftime('%Y-%m-%d') if stay else '' }}" required>
+            </div>
+
+            <div class="form-group">
+                <label for="check_out">Check-out Date:</label>
+                <input type="date" id="check_out" name="check_out" value="{{ stay.check_out.strftime('%Y-%m-%d') if stay else '' }}" required>
+            </div>
+
+            <div class="form-group">
+                <label for="points_cost">Points Cost:</label>
+                <input type="number" id="points_cost" name="points_cost" value="{{ stay.points_cost if stay else '' }}" required min="1">
+            </div>
+
+            <div class="form-group">
+                <label for="status">Status:</label>
+                <select id="status" name="status" required>
+                    <option value="planned" {% if stay and stay.status == 'planned' %}selected{% endif %}>Planned</option>
+                    <option value="booked" {% if stay and stay.status == 'booked' %}selected{% endif %}>Booked</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <h3>Point Allocation</h3>
+                <div id="pointShares">
+                    {% for member in members %}
+                    <div class="point-share">
+                        <label>
+                            <input type="checkbox"
+                                   class="member-checkbox"
+                                   data-member-id="{{ member.id }}"
+                                   data-member-name="{{ member.name }}"
+                                   {% if stay and member.id in stay_members %}checked{% endif %}>
+                            {{ member.name }}
+                        </label>
+                        <input type="number"
+                               name="point_shares[]"
+                               class="points-input"
+                               value="{{ stay_members[member.id].points_share if stay and member.id in stay_members else 0 }}"
+                               min="0"
+                               {% if not stay or member.id not in stay_members %}disabled{% endif %}>
+                        <input type="hidden"
+                               name="user_ids[]"
+                               value="member_{{ member.id }}"
+                               {% if not stay or member.id not in stay_members %}disabled{% endif %}>
+                    </div>
+                    {% endfor %}
+                </div>
+                <p>Total Points Allocated: <span id="totalPoints">0</span></p>
+            </div>
+
+            <div class="form-group">
+                <h3>Additional Guests</h3>
+                <div id="guestList">
+                    {% for guest in additional_guests %}
+                    <div class="guest-entry">
+                        <label>
+                            <input type="checkbox"
+                                   class="guest-checkbox"
+                                   data-guest-id="{{ guest.id }}"
+                                   data-guest-name="{{ guest.name }}"
+                                   {% if guest in stay.additional_guests %}checked{% endif %}>
+                            {{ guest.name }}
+                        </label>
+                        <div class="guest-point-shares" style="display: {% if guest in stay.additional_guests %}block{% else %}none{% endif %}">
+                            <h4>Point Contributions for {{ guest.name }}</h4>
+                            {% for member in members %}
+                            <div class="point-share">
+                                <label>{{ member.name }}</label>
+                                <input type="number"
+                                       name="guest_points[{{ guest.id }}][{{ member.id }}]"
+                                       class="points-input guest-points-input"
+                                       value="{{ guest_points.get(guest.id, {}).get(member.id, 0) }}"
+                                       min="0"
+                                       {% if guest not in stay.additional_guests %}disabled{% endif %}>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn-primary">{{ 'Save Changes' if stay else 'Create Stay' }}</button>
+                <a href="{{ url_for('home') }}" class="btn-secondary">Cancel</a>
+            </div>
+        </form>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const form = document.getElementById('stayForm');
+            const pointsInputs = document.querySelectorAll('.points-input');
+            const memberCheckboxes = document.querySelectorAll('.member-checkbox');
+            const guestCheckboxes = document.querySelectorAll('.guest-checkbox');
+            const totalPointsSpan = document.getElementById('totalPoints');
+            const pointsCostInput = document.getElementById('points_cost');
+
+            function updateTotalPoints() {
+                let total = 0;
+                pointsInputs.forEach(input => {
+                    if (!input.disabled) {
+                        total += parseInt(input.value) || 0;
+                    }
+                });
+                totalPointsSpan.textContent = total;
+
+                // Validate total matches points cost
+                const pointsCost = parseInt(pointsCostInput.value) || 0;
+                if (total !== pointsCost) {
+                    totalPointsSpan.style.color = 'red';
+                } else {
+                    totalPointsSpan.style.color = 'green';
+                }
+            }
+
+            // Handle member checkboxes
+            if (memberCheckboxes) {
+                memberCheckboxes.forEach(checkbox => {
+                    checkbox.addEventListener('change', function() {
+                        const pointShare = this.closest('.point-share');
+                        const pointsInput = pointShare.querySelector('.points-input');
+                        const userIdInput = pointShare.querySelector('input[name="user_ids[]"]');
+
+                        pointsInput.disabled = !this.checked;
+                        userIdInput.disabled = !this.checked;
+                        if (!this.checked) {
+                            pointsInput.value = 0;
+                        }
+                        updateTotalPoints();
+                    });
+                });
+            }
+
+            // Handle guest checkboxes
+            if (guestCheckboxes) {
+                guestCheckboxes.forEach(checkbox => {
+                    checkbox.addEventListener('change', function() {
+                        const guestEntry = this.closest('.guest-entry');
+                        const pointShares = guestEntry.querySelector('.guest-point-shares');
+                        const inputs = pointShares.querySelectorAll('.points-input');
+
+                        pointShares.style.display = this.checked ? 'block' : 'none';
+                        inputs.forEach(input => {
+                            input.disabled = !this.checked;
+                            if (!this.checked) {
+                                input.value = 0;
+                            }
+                        });
+                        updateTotalPoints();
+                    });
+                });
+            }
+
+            // Update total when any points input changes
+            if (pointsInputs) {
+                pointsInputs.forEach(input => {
+                    input.addEventListener('input', updateTotalPoints);
+                });
+            }
+
+            // Initial total points calculation
+            updateTotalPoints();
+
+            // Form validation
+            if (form) {
+                form.addEventListener('submit', function(e) {
+                    e.preventDefault(); // Stop here first to validate
+
+                    const pointsCost = parseInt(pointsCostInput.value) || 0;
+                    let totalPoints = 0;
+                    pointsInputs.forEach(input => {
+                        if (!input.disabled) {
+                            totalPoints += parseInt(input.value) || 0;
+                        }
+                    });
+
+                    if (totalPoints !== pointsCost) {
+                        alert('Total points allocated must equal points cost');
+                        return;
+                    }
+
+                    // If validation passes, submit the form
+                    if (window.self !== window.top) {  // If in iframe
+                        // After successful submission
+                        window.parent.postMessage('stay_created', '*');
+                    }
+                    form.submit(); // Actually submit the form
+                });
+            }
+        });
+    </script>
+{% endblock %}

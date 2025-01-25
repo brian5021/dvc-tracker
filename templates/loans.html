@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+
+{% block title %}Loans{% endblock %}
+
+{% block content %}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DVC Points Tracker - Point Loans</title>
+    <style>
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th, td { border: 1px solid black; padding: 12px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .container { margin: 20px; }
+        .nav { margin-bottom: 20px; }
+        form { margin: 20px 0; padding: 20px; border: 1px solid #ccc; }
+        form div { margin: 10px 0; }
+        label { display: inline-block; width: 100px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="nav">
+            <a href="{{ url_for('home') }}">← Back to Home</a>
+        </div>
+
+        <h1>Point Loans</h1>
+
+        <h2>Create New Loan</h2>
+        <form id="loan-form" onsubmit="handleCreateLoan(event)">
+            <div>
+                <label>Lender:</label>
+                <select name="lender_id" required>
+                    {% for member in members %}
+                    <option value="{{ member.id }}">{{ member.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label>Borrower:</label>
+                <select name="borrower_id" required>
+                    {% for member in members %}
+                    <option value="{{ member.id }}">{{ member.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label>Points:</label>
+                <input type="number" name="points" required min="1">
+            </div>
+            <div>
+                <label>Use Year:</label>
+                <input type="number" name="use_year" required min="2024" value="2024">
+            </div>
+            <button type="submit">Create Loan</button>
+        </form>
+
+        <h2>Active Loans</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Lender</th>
+                    <th>Borrower</th>
+                    <th>Points</th>
+                    <th>Use Year</th>
+                    <th>Date Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for loan in active_loans %}
+                <tr>
+                    <td>{{ loan.lender.name }}</td>
+                    <td>{{ loan.borrower.name }}</td>
+                    <td>{{ loan.points }}</td>
+                    <td>{{ loan.use_year }}</td>
+                    <td>{{ loan.timestamp.strftime('%Y-%m-%d') }}</td>
+                    <td>
+                        <button onclick="handleRepayLoan({{ loan.id }})">Repay Loan</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <h2>Repaid Loans</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Lender</th>
+                    <th>Borrower</th>
+                    <th>Points</th>
+                    <th>Use Year</th>
+                    <th>Repay Year</th>
+                    <th>Date Created</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for loan in repaid_loans %}
+                <tr>
+                    <td>{{ loan.lender.name }}</td>
+                    <td>{{ loan.borrower.name }}</td>
+                    <td>{{ loan.points }}</td>
+                    <td>{{ loan.use_year }}</td>
+                    <td>{{ loan.repay_year }}</td>
+                    <td>{{ loan.timestamp.strftime('%Y-%m-%d') }}</td>
+                    <td>Repaid</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        async function handleCreateLoan(event) {
+            event.preventDefault();
+            try {
+                const response = await fetch('/api/loans', {
+                    method: 'POST',
+                    body: new FormData(event.target)
+                });
+                const result = await response.json();
+
+                if (response.ok) {
+                    window.location.reload();
+                } else {
+                    alert(result.error);
+                }
+            } catch (error) {
+                alert('Error creating loan: ' + error.message);
+            }
+        }
+
+        async function handleRepayLoan(loanId) {
+            if (!confirm('Are you sure you want to repay this loan?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/loans/${loanId}/repay`, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+
+                if (response.ok) {
+                    window.location.reload();
+                } else {
+                    alert(result.error);
+                }
+            } catch (error) {
+                alert('Error repaying loan: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>
+{% endblock %}

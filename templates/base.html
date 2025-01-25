@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{% block title %}DVC Points{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <nav class="main-nav">
+        <div class="nav-container">
+            <a href="{{ url_for('home') }}" class="nav-item">Home</a>
+            <a href="{{ url_for('view_loans') }}" class="nav-item">Loans</a>
+            <a href="{{ url_for('view_point_balances') }}" class="nav-item">Point Balances</a>
+            <a href="{{ url_for('activity_log') }}" class="nav-item">Activity</a>
+            <a href="{{ url_for('manage_guests') }}" class="nav-item">Guests</a>
+        </div>
+    </nav>
+
+    <div class="content">
+        {% block content %}{% endblock %}
+    </div>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

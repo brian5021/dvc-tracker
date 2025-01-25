@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>New Stay</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>New Stay</h1>
+        <form id="stayForm" method="POST">
+            <div class="form-group">
+                <label for="resort">Resort:</label>
+                <input type="text" id="resort" name="resort" required>
+            </div>
+
+            <div class="form-group">
+                <label for="check_in">Check-in Date:</label>
+                <input type="date" id="check_in" name="check_in" required>
+            </div>
+
+            <div class="form-group">
+                <label for="check_out">Check-out Date:</label>
+                <input type="date" id="check_out" name="check_out" required>
+            </div>
+
+            <div class="form-group">
+                <label for="points_cost">Points Cost:</label>
+                <input type="number" id="points_cost" name="points_cost" required min="1">
+            </div>
+
+            <div class="form-group">
+                <label for="status">Status:</label>
+                <select id="status" name="status" required>
+                    <option value="planned">Planned</option>
+                    <option value="booked">Booked</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <h3>Point Allocation</h3>
+                <div id="pointShares">
+                    {% for member in members %}
+                    <div class="point-share">
+                        <label>
+                            <input type="checkbox"
+                                   class="member-checkbox"
+                                   data-member-id="{{ member.id }}"
+                                   data-member-name="{{ member.name }}">
+                            {{ member.name }}
+                        </label>
+                        <input type="number"
+                               name="point_shares[]"
+                               class="points-input"
+                               value="0"
+                               min="0"
+                               disabled>
+                        <input type="hidden"
+                               name="user_ids[]"
+                               value="member_{{ member.id }}"
+                               disabled>
+                    </div>
+                    {% endfor %}
+                </div>
+                <p>Total Points Allocated: <span id="totalPoints">0</span></p>
+            </div>
+
+            <div class="form-group">
+                <h3>Additional Guests</h3>
+                <div id="guestList">
+                    {% for guest in additional_guests %}
+                    <div class="guest-entry">
+                        <label>
+                            <input type="checkbox"
+                                   class="guest-checkbox"
+                                   data-guest-id="{{ guest.id }}"
+                                   data-guest-name="{{ guest.name }}">
+                            {{ guest.name }}
+                        </label>
+                        <div class="guest-point-shares" style="display: none;">
+                            <h4>Point Contributions for {{ guest.name }}</h4>
+                            {% for member in members %}
+                            <div class="point-share">
+                                <label>{{ member.name }}</label>
+                                <input type="number"
+                                       name="guest_points[{{ guest.id }}][{{ member.id }}]"
+                                       class="points-input"
+                                       value="0"
+                                       min="0"
+                                       disabled>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn-primary">Create Stay</button>
+                <a href="{{ url_for('home') }}" class="btn-secondary">Cancel</a>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const form = document.getElementById('stayForm');
+            const pointsInputs = document.querySelectorAll('.points-input');
+            const memberCheckboxes = document.querySelectorAll('.member-checkbox');
+            const guestCheckboxes = document.querySelectorAll('.guest-checkbox');
+            const totalPointsSpan = document.getElementById('totalPoints');
+            const pointsCostInput = document.getElementById('points_cost');
+
+            function updateTotalPoints() {
+                let total = 0;
+                pointsInputs.forEach(input => {
+                    if (!input.disabled) {
+                        total += parseInt(input.value) || 0;
+                    }
+                });
+                totalPointsSpan.textContent = total;
+
+                // Validate total matches points cost
+                const pointsCost = parseInt(pointsCostInput.value) || 0;
+                if (total !== pointsCost) {
+                    totalPointsSpan.style.color = 'red';
+                } else {
+                    totalPointsSpan.style.color = 'green';
+                }
+            }
+
+            // Handle member checkboxes
+            memberCheckboxes.forEach(checkbox => {
+                checkbox.addEventListener('change', function() {
+                    const pointShare = this.closest('.point-share');
+                    const pointsInput = pointShare.querySelector('.points-input');
+                    const userIdInput = pointShare.querySelector('input[name="user_ids[]"]');
+
+                    pointsInput.disabled = !this.checked;
+                    userIdInput.disabled = !this.checked;
+                    if (!this.checked) {
+                        pointsInput.value = 0;
+                    }
+                    updateTotalPoints();
+                });
+            });
+
+            // Handle guest checkboxes
+            guestCheckboxes.forEach(checkbox => {
+                checkbox.addEventListener('change', function() {
+                    const guestEntry = this.closest('.guest-entry');
+                    const pointShares = guestEntry.querySelector('.guest-point-shares');
+                    const inputs = pointShares.querySelectorAll('.points-input');
+
+                    pointShares.style.display = this.checked ? 'block' : 'none';
+                    inputs.forEach(input => {
+                        input.disabled = !this.checked;
+                        if (!this.checked) {
+                            input.value = 0;
+                        }
+                    });
+                    updateTotalPoints();
+                });
+            });
+
+            // Update total when any points input changes
+            pointsInputs.forEach(input => {
+                input.addEventListener('input', updateTotalPoints);
+            });
+
+            // Form validation
+            form.addEventListener('submit', function(e) {
+                const pointsCost = parseInt(pointsCostInput.value) || 0;
+                let totalPoints = 0;
+                pointsInputs.forEach(input => {
+                    if (!input.disabled) {
+                        totalPoints += parseInt(input.value) || 0;
+                    }
+                });
+
+                if (totalPoints !== pointsCost) {
+                    e.preventDefault();
+                    alert('Total points allocated must equal points cost');
+                }
+            });
+        });
+    </script>
+</body>
+</html>

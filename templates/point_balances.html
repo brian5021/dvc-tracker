@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Point Balances{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1>Point Balances</h1>
+
+    <div class="year-selector">
+        <label for="yearSelect">Select Year:</label>
+        <select id="yearSelect" onchange="window.location.href='{{ url_for('view_point_balances') }}?year=' + this.value">
+            {% for year in available_years %}
+            <option value="{{ year }}" {% if year == selected_year %}selected{% endif %}>{{ year }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <table class="balance-table">
+        <thead>
+            <tr>
+                <th>Member</th>
+                <th>Regular Points</th>
+                <th>Banked Points</th>
+                <th>Points Used</th>
+                <th>Points Remaining</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for member in members %}
+            <tr>
+                <td>{{ member.name }}</td>
+                <td>{{ point_allocations[member.id][selected_year]['regular'].points if point_allocations[member.id][selected_year]['regular'] else 0 }}</td>
+                <td>{{ point_allocations[member.id][selected_year]['banked'].points if point_allocations[member.id][selected_year]['banked'] else 0 }}</td>
+                <td>{{ points_used.get(member.id, 0) }}</td>
+                <td>
+                    {% set regular = point_allocations[member.id][selected_year]['regular'].points if point_allocations[member.id][selected_year]['regular'] else 0 %}
+                    {% set banked = point_allocations[member.id][selected_year]['banked'].points if point_allocations[member.id][selected_year]['banked'] else 0 %}
+                    {% set used = points_used.get(member.id, 0) %}
+                    {{ regular + banked - used }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

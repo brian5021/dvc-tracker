@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Activity Log{% endblock %}
+
+{% block head %}
+<style>
+    .filters { margin: 20px 0; }
+    .filters select { padding: 5px; margin-left: 10px; }
+    .activity-type {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 3px;
+        background-color: #f0f0f0;
+        font-size: 0.9em;
+    }
+    .stay_created { background-color: #e3f2fd; }
+    .stay_booked { background-color: #e8f5e9; }
+    .stay_updated { background-color: #fff3e0; }
+    .points_banked { background-color: #f3e5f5; }
+    .points_transferred { background-color: #e0f2f1; }
+</style>
+{% endblock %}
+
+{% block content %}
+    <div class="container">
+        <h1>Activity Log</h1>
+
+        <div class="filters">
+            <label>Filter by type:</label>
+            <select id="actionTypeFilter">
+                <option value="">All</option>
+                <option value="stay_created">Stay Created</option>
+                <option value="stay_booked">Stay Booked</option>
+                <option value="stay_updated">Stay Updated</option>
+                <option value="points_banked">Points Banked</option>
+                <option value="points_transferred">Points Transferred</option>
+            </select>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Action</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in activity_log %}
+                <tr>
+                    <td>{{ entry.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td><span class="activity-type {{ entry.action_type }}">{{ entry.action_type }}</span></td>
+                    <td>{{ entry.description }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% endblock %}

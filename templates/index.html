@@ -1,0 +1,590 @@
+{% extends "base.html" %}
+
+{% block title %}DVC Points - Home{% endblock %}
+
+{% block content %}
+    <div class="container">
+        <h1>DVC Points Tracker</h1>
+
+        <div class="points-section">
+            <h2>Point Balances</h2>
+            <div class="banking-info">
+                • Points must be banked by April 30th each year<br>
+                • Unbanked points expire if not used by August 31st<br>
+                • Banked points become available on September 1st
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Member</th>
+                        <th>{{ current_year }} Points<br><span style="font-weight: normal; font-size: 0.9em;">(Sept {{ current_year }} - Aug {{ current_year + 1 }})</span></th>
+                        <th>{{ current_year }} Banked Points<br><span style="font-weight: normal; font-size: 0.9em;">(Available Sept 1, {{ current_year + 1 }})</span></th>
+                        <th>Points Used<br><span style="font-weight: normal; font-size: 0.9em;">(Current Year)</span></th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for member in members %}
+                    <tr>
+                        <td>{{ member.name }}</td>
+                        <td class="points-cell">
+                            {{ point_allocations[member.id][current_year]['regular'].points if point_allocations[member.id][current_year]['regular'] else 0 }}
+                        </td>
+                        <td class="points-cell">
+                            {{ point_allocations[member.id][current_year]['banked'].points if point_allocations[member.id][current_year]['banked'] else 0 }}
+                        </td>
+                        <td class="points-cell">
+                            {{ points_used[member.id] if member.id in points_used else 0 }}
+                        </td>
+                        <td>
+                            {% set regular_points = point_allocations[member.id][current_year]['regular'].points if point_allocations[member.id][current_year]['regular'] else 0 %}
+                            {% if regular_points > 0 %}
+                            <form method="POST"
+                                  action="{{ url_for('bank_points', member_id=member.id, use_year=current_year) }}"
+                                  class="bank-form">
+                                <button type="button" onclick="showBankInput(this)" class="bank-button" title="Must bank by April 30, {{ current_year }}">Bank Points</button>
+                                <div class="bank-input-container" style="display: none;">
+                                    <input type="number"
+                                           name="points_to_bank"
+                                           value="{{ regular_points }}"
+                                           min="1"
+                                           max="{{ regular_points }}"
+                                           class="bank-input">
+                                    <button type="submit">Confirm</button>
+                                    <button type="button" onclick="hideBankInput(this)">Cancel</button>
+                                </div>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="stays-section">
+            <div class="section-header">
+                <h2>Stays</h2>
+                <button onclick="toggleNewStayForm()" class="btn-primary">Add Stay</button>
+            </div>
+
+            <!-- New Stay Form (hidden by default) -->
+            <div id="newStayFormContainer" style="display: none;">
+                <div class="form-container">
+                    <form id="stayForm" method="POST" action="{{ url_for('new_stay') }}">
+                        <div class="form-group">
+                            <label for="resort">Resort:</label>
+                            <input type="text" id="resort" name="resort" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="check_in">Check-in Date:</label>
+                            <input type="date" id="check_in" name="check_in" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="check_out">Check-out Date:</label>
+                            <input type="date" id="check_out" name="check_out" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="points_cost">Points Cost:</label>
+                            <input type="number" id="points_cost" name="points_cost" required min="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="status">Status:</label>
+                            <select id="status" name="status" required>
+                                <option value="planned">Planned</option>
+                                <option value="booked">Booked</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <h3>Point Allocation</h3>
+                            <div id="pointShares">
+                                {% for member in members %}
+                                <div class="point-share">
+                                    <label>
+                                        <input type="checkbox"
+                                               class="member-checkbox"
+                                               data-member-id="{{ member.id }}"
+                                               data-member-name="{{ member.name }}">
+                                        {{ member.name }}
+                                    </label>
+                                    <input type="number"
+                                           name="point_shares[]"
+                                           class="points-input"
+                                           value="0"
+                                           min="0"
+                                           disabled>
+                                    <input type="hidden"
+                                           name="user_ids[]"
+                                           value="member_{{ member.id }}"
+                                           disabled>
+                                </div>
+                                {% endfor %}
+                            </div>
+                            <p>Total Points Allocated: <span id="totalPoints">0</span></p>
+                        </div>
+
+                        <div class="form-group">
+                            <h3>Additional Guests</h3>
+                            <div id="guestList">
+                                {% for guest in additional_guests %}
+                                <div class="guest-entry">
+                                    <label>
+                                        <input type="checkbox"
+                                               class="guest-checkbox"
+                                               data-guest-id="{{ guest.id }}"
+                                               data-guest-name="{{ guest.name }}">
+                                        {{ guest.name }}
+                                    </label>
+                                    <div class="guest-point-shares" style="display: none;">
+                                        <h4>Point Contributions for {{ guest.name }}</h4>
+                                        {% for member in members %}
+                                        <div class="point-share">
+                                            <label>{{ member.name }}</label>
+                                            <input type="number"
+                                                   name="guest_points[{{ guest.id }}][{{ member.id }}]"
+                                                   class="points-input guest-points-input"
+                                                   value="0"
+                                                   min="0"
+                                                   disabled>
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="submit" class="btn-primary">Create Stay</button>
+                            <button type="button" class="btn-secondary" onclick="toggleNewStayForm()">Cancel</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Resort</th>
+                        <th>Dates</th>
+                        <th>Members</th>
+                        <th>Additional Guests</th>
+                        <th>Points</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for stay in stays %}
+                    <tr>
+                        <td>{{ stay.resort }}</td>
+                        <td>{{ stay.check_in.strftime('%Y-%m-%d') }} to {{ stay.check_out.strftime('%Y-%m-%d') }}</td>
+                        <td>
+                            {% for stay_member in stay.members %}
+                            <span class="member-points">
+                                {{ stay_member.member.name }} ({{ stay_member.points_share }} pts)
+                            </span>
+                            {% endfor %}
+                        </td>
+                        <td>
+                            {% for guest in stay.additional_guests %}
+                            <span class="guest-name">{{ guest.name }}</span>{% if not loop.last %}, {% endif %}
+                            {% endfor %}
+                        </td>
+                        <td>{{ stay.points_cost }}</td>
+                        <td>
+                            <span class="status-{{ stay.status }}">
+                                {{ stay.status.title() }}
+                            </span>
+                        </td>
+                        <td>
+                            {% if stay.status == 'planned' %}
+                            <form method="POST"
+                                  action="{{ url_for('update_stay_status', stay_id=stay.id) }}"
+                                  style="display: inline; border: none; padding: 0; margin: 0;"
+                                  onsubmit="event.preventDefault(); bookStay({{ stay.id }});">
+                                <input type="hidden" name="status" value="booked">
+                                <button type="submit">Book Stay</button>
+                            </form>
+                            {% endif %}
+                            <button onclick="editStay({{ stay.id }})" class="edit-button">Edit</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td colspan="7">
+                            <form id="editStayForm{{ stay.id }}" class="edit-stay-form" style="display: none;">
+                                <div class="form-grid">
+                                    <div>
+                                        <label>Resort:</label>
+                                        <input type="text" name="resort" value="{{ stay.resort }}" required>
+                                    </div>
+                                    <div>
+                                        <label>Check-in:</label>
+                                        <input type="date" name="check_in" value="{{ stay.check_in.strftime('%Y-%m-%d') }}" required>
+                                    </div>
+                                    <div>
+                                        <label>Check-out:</label>
+                                        <input type="date" name="check_out" value="{{ stay.check_out.strftime('%Y-%m-%d') }}" required>
+                                    </div>
+                                    <div>
+                                        <label>Points Cost:</label>
+                                        <input type="number" name="points_cost" value="{{ stay.points_cost }}" required>
+                                    </div>
+
+                                    <div class="member-shares-section">
+                                        <label>Members & Points:</label>
+                                        <div id="edit-member-shares{{ stay.id }}">
+                                            {% for stay_member in stay.members %}
+                                            <div class="member-share">
+                                                <select name="user_ids[]" required>
+                                                    <optgroup label="Members">
+                                                        {% for member in members %}
+                                                        <option value="member_{{ member.id }}"
+                                                                {% if member.id == stay_member.member_id %}selected{% endif %}>
+                                                            {{ member.name }}
+                                                        </option>
+                                                        {% endfor %}
+                                                    </optgroup>
+                                                </select>
+                                                <input type="number" name="point_shares[]" value="{{ stay_member.points_share }}" required>
+                                            </div>
+                                            {% endfor %}
+                                        </div>
+                                        <button type="button" onclick="addMemberShareToEdit({{ stay.id }})">Add Another Person</button>
+                                    </div>
+
+                                    <div class="guest-section">
+                                        <label>Additional Guests:</label>
+                                        <div id="edit-guest-shares{{ stay.id }}">
+                                            {% for guest in additional_guests %}
+                                            <div class="guest-entry">
+                                                <label>
+                                                    <input type="checkbox"
+                                                           class="guest-checkbox"
+                                                           data-guest-id="{{ guest.id }}"
+                                                           data-guest-name="{{ guest.name }}"
+                                                           {% if guest in stay.additional_guests %}checked{% endif %}>
+                                                    {{ guest.name }}
+                                                </label>
+                                                <div class="guest-point-shares" style="display: {% if guest in stay.additional_guests %}block{% else %}none{% endif %}">
+                                                    <h4>Point Contributions for {{ guest.name }}</h4>
+                                                    {% for member in members %}
+                                                    <div class="point-share">
+                                                        <label>{{ member.name }}</label>
+                                                        {% set guest_points = {} %}
+                                                        {% for stay_guest in stay.stay_guests if stay_guest.guest_id == guest.id %}
+                                                            {% for gp in stay_guest.member_points %}
+                                                                {% if gp.member_id == member.id %}
+                                                                    {% set _ = guest_points.update({member.id: gp.points}) %}
+                                                                {% endif %}
+                                                            {% endfor %}
+                                                        {% endfor %}
+                                                        <input type="number"
+                                                               name="guest_points[{{ guest.id }}][{{ member.id }}]"
+                                                               class="points-input guest-points-input"
+                                                               value="{{ guest_points.get(member.id, 0) }}"
+                                                               min="0"
+                                                               {% if guest not in stay.additional_guests %}disabled{% endif %}>
+                                                    </div>
+                                                    {% endfor %}
+                                                </div>
+                                            </div>
+                                            {% endfor %}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="form-actions">
+                                    <button type="submit">Save Changes</button>
+                                    <button type="button" onclick="cancelEdit({{ stay.id }})">Cancel</button>
+                                </div>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <style>
+    .section-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+    }
+
+    .form-container {
+        background-color: #f9f9f9;
+        padding: 20px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+        border: 1px solid #ddd;
+    }
+
+    .form-group {
+        margin-bottom: 15px;
+    }
+
+    .point-share {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+    }
+
+    .guest-point-shares {
+        margin-left: 20px;
+        padding: 10px;
+        background-color: #f5f5f5;
+        border-radius: 4px;
+    }
+    </style>
+
+    <script>
+    function toggleNewStayForm() {
+        const formContainer = document.getElementById('newStayFormContainer');
+        formContainer.style.display = formContainer.style.display === 'none' ? 'block' : 'none';
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        const form = document.getElementById('stayForm');
+        const pointsInputs = document.querySelectorAll('.points-input');
+        const memberCheckboxes = document.querySelectorAll('.member-checkbox');
+        const guestCheckboxes = document.querySelectorAll('.guest-checkbox');
+        const totalPointsSpan = document.getElementById('totalPoints');
+        const pointsCostInput = document.getElementById('points_cost');
+
+        function updateTotalPoints() {
+            let total = 0;
+            pointsInputs.forEach(input => {
+                if (!input.disabled) {
+                    total += parseInt(input.value) || 0;
+                }
+            });
+            totalPointsSpan.textContent = total;
+
+            const pointsCost = parseInt(pointsCostInput.value) || 0;
+            if (total !== pointsCost) {
+                totalPointsSpan.style.color = 'red';
+            } else {
+                totalPointsSpan.style.color = 'green';
+            }
+        }
+
+        // Handle member checkboxes
+        memberCheckboxes.forEach(checkbox => {
+            checkbox.addEventListener('change', function() {
+                const pointShare = this.closest('.point-share');
+                const pointsInput = pointShare.querySelector('.points-input');
+                const userIdInput = pointShare.querySelector('input[name="user_ids[]"]');
+
+                pointsInput.disabled = !this.checked;
+                userIdInput.disabled = !this.checked;
+                if (!this.checked) {
+                    pointsInput.value = 0;
+                }
+                updateTotalPoints();
+            });
+        });
+
+        // Handle guest checkboxes
+        guestCheckboxes.forEach(checkbox => {
+            checkbox.addEventListener('change', function() {
+                const guestEntry = this.closest('.guest-entry');
+                const pointShares = guestEntry.querySelector('.guest-point-shares');
+                const inputs = pointShares.querySelectorAll('.points-input');
+
+                pointShares.style.display = this.checked ? 'block' : 'none';
+                inputs.forEach(input => {
+                    input.disabled = !this.checked;
+                    if (!this.checked) {
+                        input.value = 0;
+                    }
+                });
+                updateTotalPoints();
+            });
+        });
+
+        // Update total when any points input changes
+        pointsInputs.forEach(input => {
+            input.addEventListener('input', updateTotalPoints);
+        });
+
+        // Form validation
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            const pointsCost = parseInt(pointsCostInput.value) || 0;
+            let totalPoints = 0;
+            pointsInputs.forEach(input => {
+                if (!input.disabled) {
+                    totalPoints += parseInt(input.value) || 0;
+                }
+            });
+
+            if (totalPoints !== pointsCost) {
+                alert('Total points allocated must equal points cost');
+                return;
+            }
+
+            // If validation passes, submit the form
+            form.submit();
+        });
+
+        // Points cost change handler
+        pointsCostInput.addEventListener('change', function() {
+            updateTotalPoints();
+        });
+    });
+
+    function editStay(stayId) {
+        document.getElementById(`editStayForm${stayId}`).style.display = 'block';
+
+        // Initialize guest checkboxes
+        const guestCheckboxes = document.querySelectorAll(`#editStayForm${stayId} .guest-checkbox`);
+        guestCheckboxes.forEach(checkbox => {
+            checkbox.addEventListener('change', function() {
+                const guestEntry = this.closest('.guest-entry');
+                const pointShares = guestEntry.querySelector('.guest-point-shares');
+                const inputs = pointShares.querySelectorAll('.points-input');
+
+                pointShares.style.display = this.checked ? 'block' : 'none';
+                inputs.forEach(input => {
+                    input.disabled = !this.checked;
+                    if (!this.checked) {
+                        input.value = 0;
+                    }
+                });
+            });
+        });
+    }
+
+    function cancelEdit(stayId) {
+        document.getElementById(`editStayForm${stayId}`).style.display = 'none';
+    }
+
+    function addMemberShareToEdit(stayId) {
+        const container = document.getElementById(`edit-member-shares${stayId}`);
+        const newShare = container.children[0].cloneNode(true);
+        newShare.querySelector('select[name="user_ids[]"]').value = '';
+        newShare.querySelector('input[name="point_shares[]"]').value = '';
+        container.appendChild(newShare);
+        redistributePoints();
+    }
+
+    // Update the form submission handler
+    document.querySelectorAll('.edit-stay-form').forEach(form => {
+        form.onsubmit = async function(e) {
+            e.preventDefault();
+            const stayId = this.id.replace('editStayForm', '');
+            const formData = new FormData(this);
+
+            // Collect all the data including guest points
+            const data = {
+                resort: formData.get('resort'),
+                check_in: formData.get('check_in'),
+                check_out: formData.get('check_out'),
+                points_cost: parseInt(formData.get('points_cost')),
+                members: [],
+                guests: []
+            };
+
+            // Get all member shares
+            const memberShares = this.querySelectorAll('.member-share');
+            for (const share of memberShares) {
+                const [type, id] = share.querySelector('select[name="user_ids[]"]').value.split('_');
+                const points = parseInt(share.querySelector('input[name="point_shares[]"]').value);
+                data.members.push({
+                    member_id: parseInt(id),
+                    points_share: points
+                });
+            }
+
+            // Get all guest data
+            const guestEntries = this.querySelectorAll('.guest-entry');
+            for (const entry of guestEntries) {
+                const checkbox = entry.querySelector('.guest-checkbox');
+                if (checkbox.checked) {
+                    const guestId = parseInt(checkbox.dataset.guestId);
+                    const guestPoints = {};
+                    entry.querySelectorAll('.guest-point-shares .point-share').forEach(share => {
+                        const input = share.querySelector('.points-input');
+                        const points = parseInt(input.value) || 0;
+                        if (points > 0) {
+                            const memberId = parseInt(input.name.match(/\[(\d+)\]$/)[1]);
+                            guestPoints[memberId] = points;
+                        }
+                    });
+                    if (Object.keys(guestPoints).length > 0) {
+                        data.guests.push({
+                            guest_id: guestId,
+                            member_points: guestPoints
+                        });
+                    }
+                }
+            }
+
+            try {
+                const response = await fetch(`/api/stays/${stayId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+                if (response.ok) {
+                    window.location.reload();
+                } else {
+                    alert(result.error);
+                }
+            } catch (error) {
+                alert('Error updating stay: ' + error.message);
+            }
+        };
+    });
+
+    async function updateStayStatus(stayId, newStatus) {
+        try {
+            const formData = new FormData();
+            formData.append('status', newStatus);
+
+            const response = await fetch(`/api/stays/${stayId}/status`, {
+                method: 'POST',
+                body: formData
+            });
+
+            const result = await response.json();
+            if (response.ok) {
+                // Reload the page to show the updated status
+                window.location.reload();
+            } else {
+                // Show error in alert instead of redirecting
+                alert(result.error || 'Error updating stay status');
+                return false;
+            }
+        } catch (error) {
+            alert('Error: ' + error.message);
+            return false;
+        }
+    }
+
+    // Update the book stay function
+    function bookStay(stayId) {
+        updateStayStatus(stayId, 'booked');
+    }
+
+    // Add this if you have an unbook function
+    function unbookStay(stayId) {
+        updateStayStatus(stayId, 'planned');
+    }
+    </script>
+{% endblock %}
