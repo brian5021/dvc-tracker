@@ -26,34 +26,99 @@
 
         <h1>Point Loans</h1>
 
-        <h2>Create New Loan</h2>
-        <form id="loan-form" onsubmit="handleCreateLoan(event)">
-            <div>
-                <label>Lender:</label>
-                <select name="lender_id" required>
-                    {% for member in members %}
-                    <option value="{{ member.id }}">{{ member.name }}</option>
-                    {% endfor %}
-                </select>
+        <div class="point-sharing-section">
+            <h2>Point Sharing</h2>
+
+            <!-- Form to record new point sharing -->
+            <form method="POST" action="{{ url_for('create_loan') }}" onsubmit="return createLoan(event)">
+                <div class="form-group">
+                    <label for="lender_id">Sharing From:</label>
+                    <select name="lender_id" id="lender_id" required>
+                        {% for member in members %}
+                        <option value="{{ member.id }}">{{ member.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="borrower_id">Sharing To:</label>
+                    <select name="borrower_id" id="borrower_id" required>
+                        {% for member in members %}
+                        <option value="{{ member.id }}">{{ member.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="points">Points:</label>
+                    <input type="number" name="points" id="points" required min="1">
+                </div>
+
+                <div class="form-group">
+                    <label for="use_year">Use Year:</label>
+                    <input type="number" name="use_year" id="use_year" value="{{ current_year }}" required>
+                </div>
+
+                <button type="submit">Record Point Sharing</button>
+            </form>
+
+            <!-- Point sharing summary -->
+            <h3>Current Point Sharing Summary</h3>
+            <div class="sharing-summary">
+                {% for key, share in point_shares.items() %}
+                    {% if share.net_points != 0 %}
+                    <div class="sharing-entry">
+                        <h4>{{ share.members[0] }} ↔ {{ share.members[1] }}</h4>
+                        <p class="net-points {% if share.net_points > 0 %}positive{% else %}negative{% endif %}">
+                            Net points: {{ share.net_points }}
+                            {% if share.net_points > 0 %}
+                                ({{ share.members[1] }} owes {{ share.members[0] }})
+                            {% else %}
+                                ({{ share.members[0] }} owes {{ share.members[1] }})
+                            {% endif %}
+                        </p>
+
+                        <details>
+                            <summary>Transaction History</summary>
+                            <table class="transaction-history">
+                                <thead>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>From</th>
+                                        <th>To</th>
+                                        <th>Points</th>
+                                        <th>Use Year</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for transaction in share.transactions %}
+                                    <tr>
+                                        <td>{{ transaction.date.strftime('%Y-%m-%d') }}</td>
+                                        <td>{{ transaction.lender }}</td>
+                                        <td>{{ transaction.borrower }}</td>
+                                        <td>{{ transaction.points }}</td>
+                                        <td>{{ transaction.use_year }}</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </details>
+                    </div>
+                    {% endif %}
+                {% endfor %}
             </div>
-            <div>
-                <label>Borrower:</label>
-                <select name="borrower_id" required>
-                    {% for member in members %}
-                    <option value="{{ member.id }}">{{ member.name }}</option>
-                    {% endfor %}
-                </select>
+
+            <!-- Recent Activity -->
+            <h3>Recent Point Sharing Activity</h3>
+            <div class="activity-log">
+                {% for activity in activities %}
+                <div class="activity-entry">
+                    <span class="timestamp">{{ activity.timestamp.strftime('%Y-%m-%d %H:%M') }}</span>
+                    <span class="description">{{ activity.description }}</span>
+                </div>
+                {% endfor %}
             </div>
-            <div>
-                <label>Points:</label>
-                <input type="number" name="points" required min="1">
-            </div>
-            <div>
-                <label>Use Year:</label>
-                <input type="number" name="use_year" required min="2024" value="2024">
-            </div>
-            <button type="submit">Create Loan</button>
-        </form>
+        </div>
 
         <h2>Active Loans</h2>
         <table>
@@ -113,22 +178,34 @@
     </div>
 
     <script>
-        async function handleCreateLoan(event) {
+        async function createLoan(event) {
             event.preventDefault();
+            const form = event.target;
+            const data = {
+                lender_id: parseInt(form.lender_id.value),
+                borrower_id: parseInt(form.borrower_id.value),
+                points: parseInt(form.points.value),
+                use_year: parseInt(form.use_year.value)
+            };
+
             try {
                 const response = await fetch('/api/loans', {
                     method: 'POST',
-                    body: new FormData(event.target)
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
                 });
-                const result = await response.json();
 
+                const result = await response.json();
                 if (response.ok) {
                     window.location.reload();
                 } else {
-                    alert(result.error);
+                    alert(result.error || 'Error recording point sharing');
                 }
             } catch (error) {
-                alert('Error creating loan: ' + error.message);
+                console.error('Error:', error);
+                alert('Error: ' + error.message);
             }
         }
 

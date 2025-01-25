@@ -24,36 +24,45 @@
 {% block content %}
     <div class="container">
         <h1>Activity Log</h1>
-
-        <div class="filters">
-            <label>Filter by type:</label>
-            <select id="actionTypeFilter">
-                <option value="">All</option>
-                <option value="stay_created">Stay Created</option>
-                <option value="stay_booked">Stay Booked</option>
-                <option value="stay_updated">Stay Updated</option>
-                <option value="points_banked">Points Banked</option>
-                <option value="points_transferred">Points Transferred</option>
-            </select>
-        </div>
-
-        <table>
+        <table class="activity-table">
             <thead>
                 <tr>
-                    <th>Time</th>
+                    <th>Date</th>
                     <th>Action</th>
                     <th>Description</th>
                 </tr>
             </thead>
-            <tbody>
-                {% for entry in activity_log %}
-                <tr>
-                    <td>{{ entry.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-                    <td><span class="activity-type {{ entry.action_type }}">{{ entry.action_type }}</span></td>
-                    <td>{{ entry.description }}</td>
-                </tr>
-                {% endfor %}
+            <tbody id="activity-log-body">
+                <!-- Logs will be loaded here -->
             </tbody>
         </table>
     </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    function loadActivityLogs() {
+        fetch('/api/activity_logs')
+            .then(response => response.json())
+            .then(logs => {
+                const tbody = document.getElementById('activity-log-body');
+                tbody.innerHTML = logs.map(log => `
+                    <tr>
+                        <td>${log.timestamp}</td>
+                        <td><span class="activity-type ${log.action_type}">${log.action_type}</span></td>
+                        <td>${log.description}</td>
+                    </tr>
+                `).join('');
+            })
+            .catch(error => console.error('Error loading activity logs:', error));
+    }
+
+    // Load logs when page loads
+    loadActivityLogs();
+
+    // Refresh logs every 30 seconds
+    setInterval(loadActivityLogs, 30000);
+});
+</script>
 {% endblock %}

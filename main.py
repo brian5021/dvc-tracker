@@ -64,10 +64,9 @@ class PointLoan(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     lender_id = db.Column(db.Integer, db.ForeignKey('member.id'), nullable=False)
     borrower_id = db.Column(db.Integer, db.ForeignKey('member.id'), nullable=False)
-    points = db.Column(db.Integer, nullable=False)
-    use_year = db.Column(db.Integer, nullable=False)  # The year the points were borrowed from
-    status = db.Column(db.String(20), nullable=False, default='active')  # active or repaid
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    points = db.Column(db.Integer, nullable=False)  # Can be positive or negative to track net points
+    use_year = db.Column(db.Integer, nullable=False)
+    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.now)
 
     lender = db.relationship('Member', foreign_keys=[lender_id])
     borrower = db.relationship('Member', foreign_keys=[borrower_id])
@@ -189,43 +188,50 @@ def get_members():
 
 @app.route('/')
 def home():
-    stays = Stay.query.order_by(Stay.check_in).all()
-    members = Member.query.all()
-    current_date = date.today()
-    current_year = get_use_year(current_date)
+    # Get the tab from query parameters
+    active_tab = request.args.get('tab', 'stays')
 
-    # Get point allocations for each member
-    point_allocations = {}
-    for member in members:
-        point_allocations[member.id] = {
-            current_year: {
-                'regular': PointAllocation.query.filter_by(
-                    member_id=member.id,
-                    use_year=current_year,
-                    is_banked=False
-                ).first(),
-                'banked': PointAllocation.query.filter_by(
-                    member_id=member.id,
-                    use_year=current_year,
-                    is_banked=True
-                ).first()
-            }
-        }
+    current_year = get_use_year(date.today())
+    members = Member.query.all()
+    stays = Stay.query.order_by(Stay.check_in.desc()).all()
+    point_shares = get_point_sharing_summary()
+    activity_logs = ActivityLog.query.order_by(ActivityLog.timestamp.desc()).all()
 
     # Calculate points used for each member
     points_used = {}
     for member in members:
         points_used[member.id] = calculate_points_used(member.id, current_year)
 
-    additional_guests = AdditionalGuest.query.all()
+    # Get point allocations for all members
+    point_allocations = {}
+    for member in members:
+        point_allocations[member.id] = {current_year: {}}
+
+        # Get regular points
+        regular = PointAllocation.query.filter_by(
+            member_id=member.id,
+            use_year=current_year,
+            is_banked=False
+        ).first()
+        point_allocations[member.id][current_year]['regular'] = regular
+
+        # Get banked points
+        banked = PointAllocation.query.filter_by(
+            member_id=member.id,
+            use_year=current_year,
+            is_banked=True
+        ).first()
+        point_allocations[member.id][current_year]['banked'] = banked
+
     return render_template('index.html',
                          members=members,
                          stays=stays,
-                         point_allocations=point_allocations,
-                         points_used=points_used,
                          current_year=current_year,
-                         now=current_date,
-                         additional_guests=additional_guests)
+                         points_used=points_used,
+                         point_allocations=point_allocations,
+                         point_shares=point_shares,
+                         activity_logs=activity_logs,
+                         active_tab=active_tab)
 
 def get_use_year(date):
     """Helper function to determine the use year for a given date.
@@ -417,11 +423,7 @@ def bank_points(member_id, use_year):
                 db.session.add(log_entry)
                 db.session.commit()
 
-                flash(f'Successfully banked {points} points', 'success')
-            else:
-                flash('Invalid points amount', 'error')
-
-            return redirect(url_for('home'))
+                return redirect(url_for('home'))  # Redirect to home
 
         except Exception as e:
             db.session.rollback()
@@ -436,373 +438,10 @@ def bank_points(member_id, use_year):
         use_year=use_year
     )
 
-@app.route('/activity')
-def activity_log():
-    activity_type = request.args.get('type', 'all')
-    member_id = request.args.get('member_id', 'all')
-
-    # Get all unique activity types for the filter dropdown
-    activity_types = db.session.query(ActivityLog.action_type).distinct().all()
-    activity_types = [t[0] for t in activity_types]
-
-    # Get all members for the filter dropdown
-    members = Member.query.all()
-
-    # Build the query
-    query = ActivityLog.query
-
-    # Filter by activity type if specified
-    if activity_type and activity_type != 'all':
-        query = query.filter_by(action_type=activity_type)
-
-    # Filter by member if specified
-    if member_id and member_id != 'all':
-        member_id = int(member_id)
-        query = query.filter(
-            db.or_(
-                ActivityLog.member1_id == member_id,
-                ActivityLog.member2_id == member_id
-            )
-        )
-
-    # Get the filtered logs
-    logs = query.order_by(ActivityLog.timestamp.desc()).all()
-
-    return render_template('activity.html',
-                         logs=logs,
-                         activity_types=activity_types,
-                         members=members,
-                         selected_type=activity_type,
-                         selected_member=member_id)
-
-@app.route('/api/loans', methods=['POST'])
-def create_loan():
-    try:
-        lender_id = int(request.form['lender_id'])
-        borrower_id = int(request.form['borrower_id'])
-        points = int(request.form['points'])
-        use_year = int(request.form['use_year'])
-
-        # Get the members first to use their names in the log
-        lender = Member.query.get_or_404(lender_id)
-        borrower = Member.query.get_or_404(borrower_id)
-
-        # Validate lender has enough regular points
-        lender_points = PointAllocation.query.filter_by(
-            member_id=lender_id,
-            use_year=use_year,
-            is_banked=False
-        ).first()
-
-        if not lender_points or lender_points.points < points:
-            return jsonify({'error': 'Lender does not have enough regular points available'}), 400
-
-        # Create the loan
-        loan = PointLoan(
-            lender_id=lender_id,
-            borrower_id=borrower_id,
-            points=points,
-            use_year=use_year
-        )
-
-        # Deduct points from lender
-        lender_points.points -= points
-
-        # Add points to borrower
-        borrower_points = PointAllocation.query.filter_by(
-            member_id=borrower_id,
-            use_year=use_year,
-            is_banked=False
-        ).first()
-
-        if not borrower_points:
-            borrower_points = PointAllocation(
-                member_id=borrower_id,
-                use_year=use_year,
-                points=0,
-                is_banked=False
-            )
-            db.session.add(borrower_points)
-
-        borrower_points.points += points
-
-        db.session.add(loan)
-
-        # Log the activity
-        log = ActivityLog(
-            action_type='points_loaned',
-            description=f"{lender.name} loaned {points} points to {borrower.name} for {use_year}",
-            member1_id=lender_id,
-            member2_id=borrower_id,
-            stay_id=None
-        )
-        db.session.add(log)
-
-        db.session.commit()
-        return jsonify({'status': 'success'})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 400
-
-@app.route('/api/loans/<int:loan_id>/repay', methods=['POST'])
-def repay_loan(loan_id):
-    try:
-        loan = PointLoan.query.get_or_404(loan_id)
-        if loan.status != 'active':
-            return jsonify({'error': 'This loan has already been repaid'}), 400
-
-        # Check regular points only
-        borrower_points = PointAllocation.query.filter_by(
-            member_id=loan.borrower_id,
-            use_year=loan.use_year,
-            is_banked=False
-        ).first()
-
-        if not borrower_points or borrower_points.points < loan.points:
-            return jsonify({'error': f'Borrower does not have enough regular points to repay the loan. Available: {borrower_points.points if borrower_points else 0}, Needed: {loan.points}'}), 400
-
-        # Transfer points back
-        borrower_points.points -= loan.points
-
-        lender_points = PointAllocation.query.filter_by(
-            member_id=loan.lender_id,
-            use_year=loan.use_year,
-            is_banked=False
-        ).first()
-
-        if not lender_points:
-            lender_points = PointAllocation(
-                member_id=loan.lender_id,
-                use_year=loan.use_year,
-                points=0,
-                is_banked=False
-            )
-            db.session.add(lender_points)
-
-        lender_points.points += loan.points
-        loan.status = 'repaid'
-
-        # Log the activity
-        log = ActivityLog(
-            action_type='loan_repaid',
-            description=f"{loan.borrower.name} repaid {loan.points} points to {loan.lender.name}",
-            member1_id=loan.lender_id,
-            member2_id=loan.borrower_id,
-            stay_id=None
-        )
-        db.session.add(log)
-
-        db.session.commit()
-        return jsonify({'status': 'success'})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 400
-
-@app.route('/loans')
-def view_loans():
-    active_loans = PointLoan.query.filter_by(status='active').all()
-    repaid_loans = PointLoan.query.filter_by(status='repaid').all()
-    members = Member.query.all()
-    return render_template('loans.html', active_loans=active_loans, repaid_loans=repaid_loans, members=members)
-
-@app.route('/api/point_transfers', methods=['POST'])
-def transfer_points():
-    try:
-        from_member_id = int(request.form['from_member_id'])
-        to_member_id = int(request.form['to_member_id'])
-        points = int(request.form['points'])
-        use_year = int(request.form['use_year'])
-
-        # Get the members
-        from_member = Member.query.get_or_404(from_member_id)
-        to_member = Member.query.get_or_404(to_member_id)
-
-        # Validate from_member has enough regular points
-        from_points = PointAllocation.query.filter_by(
-            member_id=from_member_id,
-            use_year=use_year,
-            is_banked=False
-        ).first()
-
-        if not from_points or from_points.points < points:
-            return jsonify({'error': 'Member does not have enough regular points available'}), 400
-
-        # Transfer the points
-        from_points.points -= points
-
-        to_points = PointAllocation.query.filter_by(
-            member_id=to_member_id,
-            use_year=use_year,
-            is_banked=False
-        ).first()
-
-        if not to_points:
-            to_points = PointAllocation(
-                member_id=to_member_id,
-                use_year=use_year,
-                points=0,
-                is_banked=False
-            )
-            db.session.add(to_points)
-
-        to_points.points += points
-
-        # Record the balance
-        # Always store with lower member ID as member1
-        if from_member_id < to_member_id:
-            member1_id, member2_id = from_member_id, to_member_id
-            balance_points = -points  # When member1 transfers to member2, member2 owes points to member1
-        else:
-            member1_id, member2_id = to_member_id, from_member_id
-            balance_points = points  # When member2 transfers to member1, member1 owes points to member2
-
-        balance = PointBalance(
-            member1_id=member1_id,
-            member2_id=member2_id,
-            use_year=use_year,
-            points=balance_points
-        )
-
-        db.session.add(balance)
-
-        # Log the activity
-        log = ActivityLog(
-            action_type='points_transferred',
-            description=f"{from_member.name} transferred {points} points to {to_member.name} for {use_year}",
-            member1_id=from_member_id,
-            member2_id=to_member_id,
-            stay_id=None
-        )
-        db.session.add(log)
-
-        db.session.commit()
-        return jsonify({'status': 'success'})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 400
-
-@app.route('/point_balances')
-def view_point_balances():
-    # Get all unique member pairs with their total balances by year
-    balances_raw = db.session.query(
-        PointBalance.member1_id,
-        PointBalance.member2_id,
-        PointBalance.use_year,
-        db.func.sum(PointBalance.points).label('total_balance')
-    ).group_by(
-        PointBalance.member1_id,
-        PointBalance.member2_id,
-        PointBalance.use_year
-    ).having(db.func.sum(PointBalance.points) != 0)  # Only show non-zero balances
-
-    # Convert raw balances into a graph representation
-    members = {member.id: member for member in Member.query.all()}
-    balance_graph = {}
-
-    for b in balances_raw:
-        year = b.use_year
-        if year not in balance_graph:
-            balance_graph[year] = {}
-
-        member1, member2 = members[b.member1_id], members[b.member2_id]
-        balance = b.total_balance
-
-        if member1 not in balance_graph[year]:
-            balance_graph[year][member1] = {}
-        if member2 not in balance_graph[year]:
-            balance_graph[year][member2] = {}
-
-        if balance > 0:  # member2 owes member1
-            balance_graph[year][member2][member1] = balance
-        else:  # member1 owes member2
-            balance_graph[year][member1][member2] = -balance
-
-    # Consolidate debts
-    consolidated_balances = []
-    for year in balance_graph:
-        # For each year, try to simplify the debts
-        while True:
-            # Find a chain of debts that can be simplified
-            simplified = False
-            for debtor in balance_graph[year]:
-                for creditor, amount in balance_graph[year].get(debtor, {}).items():
-                    # Look for creditor's debts
-                    for creditor_creditor, creditor_amount in balance_graph[year].get(creditor, {}).items():
-                        # We found a chain: debtor -> creditor -> creditor_creditor
-                        min_amount = min(amount, creditor_amount)
-                        if min_amount > 0:
-                            # Reduce the intermediate debt
-                            balance_graph[year][debtor][creditor] -= min_amount
-                            if balance_graph[year][debtor][creditor] == 0:
-                                del balance_graph[year][debtor][creditor]
-                            balance_graph[year][creditor][creditor_creditor] -= min_amount
-                            if balance_graph[year][creditor][creditor_creditor] == 0:
-                                del balance_graph[year][creditor][creditor_creditor]
-
-                            # Add or update the direct debt
-                            if debtor not in balance_graph[year]:
-                                balance_graph[year][debtor] = {}
-                            if creditor_creditor in balance_graph[year][debtor]:
-                                balance_graph[year][debtor][creditor_creditor] += min_amount
-                            else:
-                                balance_graph[year][debtor][creditor_creditor] = min_amount
-
-                            simplified = True
-                            break
-                    if simplified:
-                        break
-                if simplified:
-                    break
-            if not simplified:
-                break
-
-        # Convert the simplified graph back to a list of balances
-        for debtor in balance_graph[year]:
-            for creditor, amount in balance_graph[year][debtor].items():
-                if amount > 0:  # Only include non-zero balances
-                    consolidated_balances.append({
-                        'member1': debtor,
-                        'member2': creditor,
-                        'use_year': year,
-                        'total_balance': amount
-                    })
-
-    # Sort balances by year and amount
-    consolidated_balances.sort(key=lambda x: (x['use_year'], -x['total_balance']))
-
-    return render_template('point_balances.html',
-                         balances=consolidated_balances,
-                         members=members.values())
-
-@app.route('/api/guests', methods=['POST'])
-def add_guest():
-    try:
-        name = request.form['guest_name']
-        guest = AdditionalGuest(name=name)
-        db.session.add(guest)
-        db.session.commit()
-        return jsonify({'status': 'success'})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 400
-
-@app.route('/api/guests/<int:guest_id>', methods=['DELETE'])
-def delete_guest(guest_id):
-    try:
-        guest = AdditionalGuest.query.get_or_404(guest_id)
-        if len(guest.stays) > 0:
-            return jsonify({'error': 'Cannot delete guest with stays'}), 400
-        db.session.delete(guest)
-        db.session.commit()
-        return jsonify({'status': 'success'})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 400
-
 @app.route('/guests')
 def manage_guests():
-    additional_guests = AdditionalGuest.query.all()
-    return render_template('guests.html', additional_guests=additional_guests)
+    guests = AdditionalGuest.query.all()
+    return render_template('guests.html', guests=guests)
 
 @app.route('/api/undo_last_action', methods=['POST'])
 def undo_last_action():
@@ -1256,6 +895,205 @@ def init_db():
         aunt_jane = AdditionalGuest(name='Aunt Jane')
         db.session.add_all([grammy, aunt_jane])
         db.session.commit()
+
+@app.route('/loans')
+def view_loans():
+    # Get all point sharing data
+    point_shares = get_point_sharing_summary()
+    members = Member.query.all()
+    current_year = get_use_year(date.today())
+
+    # Get activity log for loans
+    loan_activities = ActivityLog.query.filter(
+        ActivityLog.action_type.in_(['point_share'])
+    ).order_by(ActivityLog.timestamp.desc()).all()
+
+    return render_template('loans.html',
+                         point_shares=point_shares,
+                         members=members,
+                         current_year=current_year,
+                         activities=loan_activities)
+
+def get_point_sharing_summary():
+    """Get the net points shared between members"""
+    point_shares = {}
+    loans = PointLoan.query.all()
+
+    for loan in loans:
+        key = tuple(sorted([loan.lender_id, loan.borrower_id]))
+        if key not in point_shares:
+            point_shares[key] = {
+                'members': [loan.lender.name, loan.borrower.name],
+                'net_points': 0,
+                'transactions': []
+            }
+
+        # Add to net points (positive means first member owes second member)
+        if key[0] == loan.lender_id:
+            point_shares[key]['net_points'] += loan.points
+        else:
+            point_shares[key]['net_points'] -= loan.points
+
+        # Add transaction to history
+        point_shares[key]['transactions'].append({
+            'date': loan.timestamp,
+            'lender': loan.lender.name,
+            'borrower': loan.borrower.name,
+            'points': loan.points,
+            'use_year': loan.use_year
+        })
+
+    return point_shares
+
+@app.route('/activity')
+def activity_log():  # This function name needs to match what's in url_for()
+    activity_type = request.args.get('type', 'all')
+    member_id = request.args.get('member_id', 'all')
+
+    # Get all unique activity types for the filter dropdown
+    activity_types = db.session.query(ActivityLog.action_type).distinct().all()
+    activity_types = [t[0] for t in activity_types]
+
+    # Get all members for the filter dropdown
+    members = Member.query.all()
+
+    # Build the query
+    query = ActivityLog.query
+
+    # Filter by activity type if specified
+    if activity_type and activity_type != 'all':
+        query = query.filter_by(action_type=activity_type)
+
+    # Filter by member if specified
+    if member_id and member_id != 'all':
+        member_id = int(member_id)
+        query = query.filter(
+            db.or_(
+                ActivityLog.member1_id == member_id,
+                ActivityLog.member2_id == member_id
+            )
+        )
+
+    # Get the filtered logs
+    logs = query.order_by(ActivityLog.timestamp.desc()).all()
+
+    return render_template('activity.html',
+                         logs=logs,
+                         activity_types=activity_types,
+                         members=members,
+                         selected_type=activity_type,
+                         selected_member=member_id)
+
+@app.route('/api/loans', methods=['POST'])
+def create_loan():
+    try:
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form
+
+        lender_id = int(data['lender_id'])
+        borrower_id = int(data['borrower_id'])
+        points = int(data['points'])
+        use_year = int(data['use_year'])
+
+        # Create the point sharing record
+        loan = PointLoan(
+            lender_id=lender_id,
+            borrower_id=borrower_id,
+            points=points,
+            use_year=use_year
+        )
+        db.session.add(loan)
+
+        # Log the activity
+        lender = Member.query.get(lender_id)
+        borrower = Member.query.get(borrower_id)
+        log_entry = ActivityLog(
+            action_type='point_share',
+            description=f'{lender.name} shared {points} points with {borrower.name} for {use_year}',
+            member1_id=lender_id,
+            member2_id=borrower_id,
+            timestamp=datetime.now()
+        )
+        db.session.add(log_entry)
+
+        db.session.commit()
+        return jsonify({'message': 'Point sharing recorded successfully'})
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error recording point share: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/guests', methods=['POST'])
+def add_guest():
+    try:
+        name = request.form.get('name')
+        if not name:
+            flash('Guest name is required', 'error')
+            return redirect(url_for('manage_guests'))
+
+        guest = AdditionalGuest(name=name)
+        db.session.add(guest)
+
+        # Log the activity
+        log = ActivityLog(
+            action_type='add_guest',
+            description=f'Added guest: {name}',
+            timestamp=datetime.now()
+        )
+        db.session.add(log)
+
+        db.session.commit()
+        flash('Guest added successfully', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error adding guest: {str(e)}', 'error')
+
+    return redirect(url_for('manage_guests'))
+
+@app.route('/api/guests/<int:guest_id>', methods=['POST'])
+def remove_guest(guest_id):
+    try:
+        guest = AdditionalGuest.query.get_or_404(guest_id)
+
+        # Check if guest is associated with any stays
+        has_stays = Stay.query.join(Stay.additional_guests).filter(
+            AdditionalGuest.id == guest_id
+        ).first() is not None
+
+        if has_stays:
+            flash('Cannot remove guest that is associated with stays', 'error')
+            return redirect(url_for('manage_guests'))
+
+        # Log the removal
+        log = ActivityLog(
+            action_type='remove_guest',
+            description=f'Removed guest: {guest.name}',
+            timestamp=datetime.now()
+        )
+        db.session.add(log)
+
+        # Remove the guest
+        db.session.delete(guest)
+        db.session.commit()
+
+        flash('Guest removed successfully', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error removing guest: {str(e)}', 'error')
+
+    return redirect(url_for('manage_guests'))
+
+@app.route('/api/activity_logs')
+def get_activity_logs():
+    logs = ActivityLog.query.order_by(ActivityLog.timestamp.desc()).all()
+    return jsonify([{
+        'timestamp': log.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+        'action_type': log.action_type,
+        'description': log.description
+    } for log in logs])
 
 if __name__ == '__main__':
     # Delete the database file if it exists

@@ -310,6 +310,111 @@
                 </tbody>
             </table>
         </div>
+
+        <!-- Replace the loans section -->
+        <div class="point-sharing-section">
+            <h2>Point Sharing</h2>
+
+            <!-- Form to record new point sharing -->
+            <form method="POST" action="{{ url_for('create_loan') }}" onsubmit="return createLoan(event)">
+                <div class="form-group">
+                    <label for="lender_id">Sharing From:</label>
+                    <select name="lender_id" id="lender_id" required>
+                        {% for member in members %}
+                        <option value="{{ member.id }}">{{ member.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="borrower_id">Sharing To:</label>
+                    <select name="borrower_id" id="borrower_id" required>
+                        {% for member in members %}
+                        <option value="{{ member.id }}">{{ member.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="points">Points:</label>
+                    <input type="number" name="points" id="points" required min="1">
+                </div>
+
+                <div class="form-group">
+                    <label for="use_year">Use Year:</label>
+                    <input type="number" name="use_year" id="use_year" value="{{ current_year }}" required>
+                </div>
+
+                <button type="submit">Record Point Sharing</button>
+            </form>
+
+            <!-- Point sharing summary -->
+            <h3>Current Point Sharing Summary</h3>
+            <div class="sharing-summary">
+                {% for key, share in point_shares.items() %}
+                    {% if share.net_points != 0 %}
+                    <div class="sharing-entry">
+                        <h4>{{ share.members[0] }} ↔ {{ share.members[1] }}</h4>
+                        <p class="net-points {% if share.net_points > 0 %}positive{% else %}negative{% endif %}">
+                            Net points: {{ share.net_points }}
+                            {% if share.net_points > 0 %}
+                                ({{ share.members[0] }} is owed points)
+                            {% else %}
+                                ({{ share.members[1] }} is owed points)
+                            {% endif %}
+                        </p>
+
+                        <details>
+                            <summary>Transaction History</summary>
+                            <table class="transaction-history">
+                                <thead>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>From</th>
+                                        <th>To</th>
+                                        <th>Points</th>
+                                        <th>Use Year</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for transaction in share.transactions %}
+                                    <tr>
+                                        <td>{{ transaction.date.strftime('%Y-%m-%d') }}</td>
+                                        <td>{{ transaction.lender }}</td>
+                                        <td>{{ transaction.borrower }}</td>
+                                        <td>{{ transaction.points }}</td>
+                                        <td>{{ transaction.use_year }}</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </details>
+                    </div>
+                    {% endif %}
+                {% endfor %}
+            </div>
+        </div>
+
+        <div id="activity-log" class="tab-content" style="display: none;">
+            <table class="activity-log-table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Action</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in activity_logs %}
+                    <tr>
+                        <td>{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                        <td>{{ log.action_type }}</td>
+                        <td>{{ log.description }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <style>
@@ -344,6 +449,43 @@
         padding: 10px;
         background-color: #f5f5f5;
         border-radius: 4px;
+    }
+
+    .point-sharing-section {
+        margin: 2em 0;
+    }
+
+    .sharing-entry {
+        border: 1px solid #ddd;
+        padding: 1em;
+        margin: 1em 0;
+        border-radius: 4px;
+    }
+
+    .net-points {
+        font-weight: bold;
+    }
+
+    .net-points.positive {
+        color: green;
+    }
+
+    .net-points.negative {
+        color: red;
+    }
+
+    .transaction-history {
+        margin-top: 1em;
+        width: 100%;
+    }
+
+    details summary {
+        cursor: pointer;
+        color: #666;
+    }
+
+    .sharing-entry h4 {
+        margin: 0 0 0.5em 0;
     }
     </style>
 
@@ -442,6 +584,9 @@
         pointsCostInput.addEventListener('change', function() {
             updateTotalPoints();
         });
+
+        // Show the active tab on page load
+        showTab('{{ active_tab }}');
     });
 
     function editStay(stayId) {
@@ -585,6 +730,50 @@
     // Add this if you have an unbook function
     function unbookStay(stayId) {
         updateStayStatus(stayId, 'planned');
+    }
+
+    async function createLoan(event) {
+        event.preventDefault();
+        const form = event.target;
+        const data = {
+            lender_id: parseInt(form.lender_id.value),
+            borrower_id: parseInt(form.borrower_id.value),
+            points: parseInt(form.points.value),
+            use_year: parseInt(form.use_year.value)
+        };
+
+        try {
+            const response = await fetch('/api/loans', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data)
+            });
+
+            const result = await response.json();
+            if (response.ok) {
+                window.location.reload();
+            } else {
+                alert(result.error || 'Error creating loan');
+            }
+        } catch (error) {
+            alert('Error: ' + error.message);
+        }
+    }
+
+    function showBankInput(button) {
+        const container = button.nextElementSibling;  // Get the bank-input-container
+        if (container) {
+            container.style.display = container.style.display === 'none' ? 'block' : 'none';
+        }
+    }
+
+    function hideBankInput(button) {
+        const container = button.closest('.bank-input-container');
+        if (container) {
+            container.style.display = 'none';
+        }
     }
     </script>
 {% endblock %}

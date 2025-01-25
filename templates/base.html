@@ -1,22 +1,30 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>{% block title %}DVC Points{% endblock %}</title>
+    <title>DVC Points Tracker</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     {% block head %}{% endblock %}
 </head>
 <body>
-    <nav class="main-nav">
+    <nav>
         <div class="nav-container">
             <a href="{{ url_for('home') }}" class="nav-item">Home</a>
-            <a href="{{ url_for('view_loans') }}" class="nav-item">Loans</a>
-            <a href="{{ url_for('view_point_balances') }}" class="nav-item">Point Balances</a>
-            <a href="{{ url_for('activity_log') }}" class="nav-item">Activity</a>
+            <a href="{{ url_for('new_stay') }}" class="nav-item">Stays</a>
+            <a href="{{ url_for('view_loans') }}" class="nav-item">Point Sharing</a>
             <a href="{{ url_for('manage_guests') }}" class="nav-item">Guests</a>
+            <a href="{{ url_for('activity_log') }}" class="nav-item">Activity</a>
         </div>
     </nav>
 
-    <div class="content">
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
         {% block content %}{% endblock %}
     </div>
 
