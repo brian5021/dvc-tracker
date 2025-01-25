@@ -7,19 +7,20 @@
         <h1>DVC Points Tracker</h1>
 
         <div class="points-section">
-            <h2>Point Balances</h2>
+            <h2>Point Balances for {{ current_year }}</h2>
             <div class="banking-info">
                 • Points must be banked by April 30th each year<br>
                 • Unbanked points expire if not used by August 31st<br>
                 • Banked points become available on September 1st
             </div>
-            <table>
+            <table class="balance-table">
                 <thead>
                     <tr>
                         <th>Member</th>
-                        <th>{{ current_year }} Points<br><span style="font-weight: normal; font-size: 0.9em;">(Sept {{ current_year }} - Aug {{ current_year + 1 }})</span></th>
-                        <th>{{ current_year }} Banked Points<br><span style="font-weight: normal; font-size: 0.9em;">(Available Sept 1, {{ current_year + 1 }})</span></th>
-                        <th>Points Used<br><span style="font-weight: normal; font-size: 0.9em;">(Current Year)</span></th>
+                        <th>Regular Points</th>
+                        <th>Banked Points</th>
+                        <th>Points Used</th>
+                        <th>Points Remaining</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
@@ -27,28 +28,26 @@
                     {% for member in members %}
                     <tr>
                         <td>{{ member.name }}</td>
-                        <td class="points-cell">
-                            {{ point_allocations[member.id][current_year]['regular'].points if point_allocations[member.id][current_year]['regular'] else 0 }}
-                        </td>
-                        <td class="points-cell">
-                            {{ point_allocations[member.id][current_year]['banked'].points if point_allocations[member.id][current_year]['banked'] else 0 }}
-                        </td>
-                        <td class="points-cell">
-                            {{ points_used[member.id] if member.id in points_used else 0 }}
+                        <td>{{ point_allocations[member.id][current_year]['regular'].points if point_allocations[member.id][current_year]['regular'] else 0 }}</td>
+                        <td>{{ point_allocations[member.id][current_year]['banked'].points if point_allocations[member.id][current_year]['banked'] else 0 }}</td>
+                        <td>{{ points_used.get(member.id, 0) }}</td>
+                        <td>
+                            {% set regular = point_allocations[member.id][current_year]['regular'].points if point_allocations[member.id][current_year]['regular'] else 0 %}
+                            {% set banked = point_allocations[member.id][current_year]['banked'].points if point_allocations[member.id][current_year]['banked'] else 0 %}
+                            {% set used = points_used.get(member.id, 0) %}
+                            {{ regular + banked - used }}
                         </td>
                         <td>
-                            {% set regular_points = point_allocations[member.id][current_year]['regular'].points if point_allocations[member.id][current_year]['regular'] else 0 %}
-                            {% if regular_points > 0 %}
-                            <form method="POST"
-                                  action="{{ url_for('bank_points', member_id=member.id, use_year=current_year) }}"
+                            {% if regular > 0 %}
+                            <form method="POST" action="{{ url_for('bank_points', member_id=member.id, use_year=current_year) }}"
                                   class="bank-form">
                                 <button type="button" onclick="showBankInput(this)" class="bank-button" title="Must bank by April 30, {{ current_year }}">Bank Points</button>
                                 <div class="bank-input-container" style="display: none;">
                                     <input type="number"
                                            name="points_to_bank"
-                                           value="{{ regular_points }}"
+                                           value="{{ regular }}"
                                            min="1"
-                                           max="{{ regular_points }}"
+                                           max="{{ regular }}"
                                            class="bank-input">
                                     <button type="submit">Confirm</button>
                                     <button type="button" onclick="hideBankInput(this)">Cancel</button>
@@ -167,15 +166,15 @@
                 </div>
             </div>
 
-            <table>
+            <table class="stays-table">
                 <thead>
                     <tr>
                         <th>Resort</th>
-                        <th>Dates</th>
-                        <th>Members</th>
-                        <th>Additional Guests</th>
+                        <th>Check-in</th>
+                        <th>Check-out</th>
                         <th>Points</th>
                         <th>Status</th>
+                        <th>Members</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
@@ -183,216 +182,23 @@
                     {% for stay in stays %}
                     <tr>
                         <td>{{ stay.resort }}</td>
-                        <td>{{ stay.check_in.strftime('%Y-%m-%d') }} to {{ stay.check_out.strftime('%Y-%m-%d') }}</td>
-                        <td>
-                            {% for stay_member in stay.members %}
-                            <span class="member-points">
-                                {{ stay_member.member.name }} ({{ stay_member.points_share }} pts)
-                            </span>
-                            {% endfor %}
-                        </td>
-                        <td>
-                            {% for guest in stay.additional_guests %}
-                            <span class="guest-name">{{ guest.name }}</span>{% if not loop.last %}, {% endif %}
-                            {% endfor %}
-                        </td>
+                        <td>{{ stay.check_in.strftime('%Y-%m-%d') }}</td>
+                        <td>{{ stay.check_out.strftime('%Y-%m-%d') }}</td>
                         <td>{{ stay.points_cost }}</td>
+                        <td class="status-{{ stay.status.lower() }}">{{ stay.status }}</td>
                         <td>
-                            <span class="status-{{ stay.status }}">
-                                {{ stay.status.title() }}
-                            </span>
+                            {% for member_share in stay.stay_members %}
+                                {{ member_share.member.name }} ({{ member_share.points_share }})
+                                {% if not loop.last %}, {% endif %}
+                            {% endfor %}
                         </td>
                         <td>
-                            {% if stay.status == 'planned' %}
-                            <form method="POST"
-                                  action="{{ url_for('update_stay_status', stay_id=stay.id) }}"
-                                  style="display: inline; border: none; padding: 0; margin: 0;"
-                                  onsubmit="event.preventDefault(); bookStay({{ stay.id }});">
-                                <input type="hidden" name="status" value="booked">
-                                <button type="submit">Book Stay</button>
-                            </form>
-                            {% endif %}
-                            <button onclick="editStay({{ stay.id }})" class="edit-button">Edit</button>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td colspan="7">
-                            <form id="editStayForm{{ stay.id }}" class="edit-stay-form" style="display: none;">
-                                <div class="form-grid">
-                                    <div>
-                                        <label>Resort:</label>
-                                        <input type="text" name="resort" value="{{ stay.resort }}" required>
-                                    </div>
-                                    <div>
-                                        <label>Check-in:</label>
-                                        <input type="date" name="check_in" value="{{ stay.check_in.strftime('%Y-%m-%d') }}" required>
-                                    </div>
-                                    <div>
-                                        <label>Check-out:</label>
-                                        <input type="date" name="check_out" value="{{ stay.check_out.strftime('%Y-%m-%d') }}" required>
-                                    </div>
-                                    <div>
-                                        <label>Points Cost:</label>
-                                        <input type="number" name="points_cost" value="{{ stay.points_cost }}" required>
-                                    </div>
-
-                                    <div class="member-shares-section">
-                                        <label>Members & Points:</label>
-                                        <div id="edit-member-shares{{ stay.id }}">
-                                            {% for stay_member in stay.members %}
-                                            <div class="member-share">
-                                                <select name="user_ids[]" required>
-                                                    <optgroup label="Members">
-                                                        {% for member in members %}
-                                                        <option value="member_{{ member.id }}"
-                                                                {% if member.id == stay_member.member_id %}selected{% endif %}>
-                                                            {{ member.name }}
-                                                        </option>
-                                                        {% endfor %}
-                                                    </optgroup>
-                                                </select>
-                                                <input type="number" name="point_shares[]" value="{{ stay_member.points_share }}" required>
-                                            </div>
-                                            {% endfor %}
-                                        </div>
-                                        <button type="button" onclick="addMemberShareToEdit({{ stay.id }})">Add Another Person</button>
-                                    </div>
-
-                                    <div class="guest-section">
-                                        <label>Additional Guests:</label>
-                                        <div id="edit-guest-shares{{ stay.id }}">
-                                            {% for guest in additional_guests %}
-                                            <div class="guest-entry">
-                                                <label>
-                                                    <input type="checkbox"
-                                                           class="guest-checkbox"
-                                                           data-guest-id="{{ guest.id }}"
-                                                           data-guest-name="{{ guest.name }}"
-                                                           {% if guest in stay.additional_guests %}checked{% endif %}>
-                                                    {{ guest.name }}
-                                                </label>
-                                                <div class="guest-point-shares" style="display: {% if guest in stay.additional_guests %}block{% else %}none{% endif %}">
-                                                    <h4>Point Contributions for {{ guest.name }}</h4>
-                                                    {% for member in members %}
-                                                    <div class="point-share">
-                                                        <label>{{ member.name }}</label>
-                                                        {% set guest_points = {} %}
-                                                        {% for stay_guest in stay.stay_guests if stay_guest.guest_id == guest.id %}
-                                                            {% for gp in stay_guest.member_points %}
-                                                                {% if gp.member_id == member.id %}
-                                                                    {% set _ = guest_points.update({member.id: gp.points}) %}
-                                                                {% endif %}
-                                                            {% endfor %}
-                                                        {% endfor %}
-                                                        <input type="number"
-                                                               name="guest_points[{{ guest.id }}][{{ member.id }}]"
-                                                               class="points-input guest-points-input"
-                                                               value="{{ guest_points.get(member.id, 0) }}"
-                                                               min="0"
-                                                               {% if guest not in stay.additional_guests %}disabled{% endif %}>
-                                                    </div>
-                                                    {% endfor %}
-                                                </div>
-                                            </div>
-                                            {% endfor %}
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div class="form-actions">
-                                    <button type="submit">Save Changes</button>
-                                    <button type="button" onclick="cancelEdit({{ stay.id }})">Cancel</button>
-                                </div>
-                            </form>
+                            <a href="{{ url_for('edit_stay', stay_id=stay.id) }}" class="edit-button">Edit</a>
                         </td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
-        </div>
-
-        <!-- Replace the loans section -->
-        <div class="point-sharing-section">
-            <h2>Point Sharing</h2>
-
-            <!-- Form to record new point sharing -->
-            <form method="POST" action="{{ url_for('create_loan') }}" onsubmit="return createLoan(event)">
-                <div class="form-group">
-                    <label for="lender_id">Sharing From:</label>
-                    <select name="lender_id" id="lender_id" required>
-                        {% for member in members %}
-                        <option value="{{ member.id }}">{{ member.name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label for="borrower_id">Sharing To:</label>
-                    <select name="borrower_id" id="borrower_id" required>
-                        {% for member in members %}
-                        <option value="{{ member.id }}">{{ member.name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label for="points">Points:</label>
-                    <input type="number" name="points" id="points" required min="1">
-                </div>
-
-                <div class="form-group">
-                    <label for="use_year">Use Year:</label>
-                    <input type="number" name="use_year" id="use_year" value="{{ current_year }}" required>
-                </div>
-
-                <button type="submit">Record Point Sharing</button>
-            </form>
-
-            <!-- Point sharing summary -->
-            <h3>Current Point Sharing Summary</h3>
-            <div class="sharing-summary">
-                {% for key, share in point_shares.items() %}
-                    {% if share.net_points != 0 %}
-                    <div class="sharing-entry">
-                        <h4>{{ share.members[0] }} ↔ {{ share.members[1] }}</h4>
-                        <p class="net-points {% if share.net_points > 0 %}positive{% else %}negative{% endif %}">
-                            Net points: {{ share.net_points }}
-                            {% if share.net_points > 0 %}
-                                ({{ share.members[0] }} is owed points)
-                            {% else %}
-                                ({{ share.members[1] }} is owed points)
-                            {% endif %}
-                        </p>
-
-                        <details>
-                            <summary>Transaction History</summary>
-                            <table class="transaction-history">
-                                <thead>
-                                    <tr>
-                                        <th>Date</th>
-                                        <th>From</th>
-                                        <th>To</th>
-                                        <th>Points</th>
-                                        <th>Use Year</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for transaction in share.transactions %}
-                                    <tr>
-                                        <td>{{ transaction.date.strftime('%Y-%m-%d') }}</td>
-                                        <td>{{ transaction.lender }}</td>
-                                        <td>{{ transaction.borrower }}</td>
-                                        <td>{{ transaction.points }}</td>
-                                        <td>{{ transaction.use_year }}</td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
-                        </details>
-                    </div>
-                    {% endif %}
-                {% endfor %}
-            </div>
         </div>
 
         <div id="activity-log" class="tab-content" style="display: none;">
@@ -730,36 +536,6 @@
     // Add this if you have an unbook function
     function unbookStay(stayId) {
         updateStayStatus(stayId, 'planned');
-    }
-
-    async function createLoan(event) {
-        event.preventDefault();
-        const form = event.target;
-        const data = {
-            lender_id: parseInt(form.lender_id.value),
-            borrower_id: parseInt(form.borrower_id.value),
-            points: parseInt(form.points.value),
-            use_year: parseInt(form.use_year.value)
-        };
-
-        try {
-            const response = await fetch('/api/loans', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(data)
-            });
-
-            const result = await response.json();
-            if (response.ok) {
-                window.location.reload();
-            } else {
-                alert(result.error || 'Error creating loan');
-            }
-        } catch (error) {
-            alert('Error: ' + error.message);
-        }
     }
 
     function showBankInput(button) {
