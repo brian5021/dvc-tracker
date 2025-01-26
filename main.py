@@ -1,6 +1,6 @@
 from flask import Flask, render_template, jsonify, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import os
 import re
 from sqlalchemy import func, extract
@@ -23,9 +23,12 @@ class Member(db.Model):
 class PointAllocation(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     member_id = db.Column(db.Integer, db.ForeignKey('member.id'), nullable=False)
-    use_year = db.Column(db.Integer, nullable=False)  # 2024
+    origin_year = db.Column(db.Integer, nullable=False)  # The year these points originated from
+    use_year = db.Column(db.Integer, nullable=False)    # The year these points must be used by
     points = db.Column(db.Integer, nullable=False)
-    is_banked = db.Column(db.Boolean, default=False)  # To track banked points
+    is_banked = db.Column(db.Boolean, default=False)    # True if these are banked points
+    is_borrowed = db.Column(db.Boolean, default=False)  # True if these are borrowed points
+    banking_deadline = db.Column(db.Date)               # Deadline to bank these points
 
 class StayMember(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -46,6 +49,71 @@ class Stay(db.Model):
     additional_guests = db.relationship('AdditionalGuest',
                                      secondary='stay_additional_guest',
                                      backref=db.backref('stays', lazy=True))
+
+    def update_status(self, new_status):
+        old_status = self.status
+        self.status = new_status
+
+        # If changing to Booked, deduct points
+        if new_status == 'Booked' and old_status != 'Booked':
+            for stay_member in self.members:
+                member = stay_member.member
+                points_needed = stay_member.points_share
+
+                # Find point allocation for the use year
+                use_year = self.check_in.year
+                allocation = PointAllocation.query.filter_by(
+                    member_id=member.id,
+                    use_year=use_year,
+                    is_banked=False
+                ).first()
+
+                if allocation and allocation.points >= points_needed:
+                    allocation.points -= points_needed
+                else:
+                    raise ValueError(f"Insufficient points for member {member.name}")
+
+        # If changing from Booked to something else, return points
+        elif old_status == 'Booked' and new_status != 'Booked':
+            for stay_member in self.members:
+                member = stay_member.member
+                points_to_return = stay_member.points_share
+
+                # Find point allocation for the use year
+                use_year = self.check_in.year
+                allocation = PointAllocation.query.filter_by(
+                    member_id=member.id,
+                    use_year=use_year,
+                    is_banked=False
+                ).first()
+
+                if allocation:
+                    allocation.points += points_to_return
+                else:
+                    # Create new allocation if none exists
+                    allocation = PointAllocation(
+                        member_id=member.id,
+                        use_year=use_year,
+                        points=points_to_return,
+                        is_banked=False
+                    )
+                    db.session.add(allocation)
+
+    def validate_booking(self):
+        """Validate that all members have sufficient points before booking"""
+        for stay_member in self.members:
+            member = stay_member.member
+            points_needed = stay_member.points_share
+
+            # Find point allocation for the use year
+            allocation = PointAllocation.query.filter_by(
+                member_id=member.id,
+                use_year=self.check_in.year,
+                is_banked=False
+            ).first()
+
+            if not allocation or allocation.points < points_needed:
+                raise ValueError(f"Insufficient points for member {member.name}")
 
 class ActivityLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -133,50 +201,33 @@ def add_stay():
     try:
         data = request.get_json()
 
+        # Create the stay
         stay = Stay(
             resort=data['resort'],
             check_in=datetime.strptime(data['check_in'], '%Y-%m-%d').date(),
             check_out=datetime.strptime(data['check_out'], '%Y-%m-%d').date(),
             points_cost=data['points_cost'],
-            status=data['status']
+            status='Planned'  # Always start as planned
         )
         db.session.add(stay)
         db.session.flush()  # Get the stay ID
 
-        # Validate total points
-        total_points = sum(
-            share.get('points', share.get('total_points', 0))
-            for share in data['shares']
-        )
-        if total_points != data['points_cost']:
-            return jsonify({'error': 'Point shares must sum up to total points cost'}), 400
+        # Add stay members
+        for member_data in data['members']:
+            stay_member = StayMember(
+                stay_id=stay.id,
+                member_id=member_data['member_id'],
+                points_share=member_data['points_share']
+            )
+            db.session.add(stay_member)
 
-        # Process each share
-        for share in data['shares']:
-            if 'guest_id' in share:
-                # Add guest to stay
-                guest = AdditionalGuest.query.get(share['guest_id'])
-                stay.additional_guests.append(guest)
-
-                # Create stay members for each contributing member
-                for member_id, points in share['member_points'].items():
-                    stay_member = StayMember(
-                        stay_id=stay.id,
-                        member_id=int(member_id),
-                        points_share=points
-                    )
-                    db.session.add(stay_member)
-            else:
-                # Regular member stay
-                stay_member = StayMember(
-                    stay_id=stay.id,
-                    member_id=share['member_id'],
-                    points_share=share['points']
-                )
-                db.session.add(stay_member)
+        # If status should be booked, update it after creating all relationships
+        if data['status'] == 'Booked':
+            stay.update_status('Booked')  # This will trigger point deduction
 
         db.session.commit()
-        return jsonify({'status': 'success'})
+        return jsonify({'success': True, 'stay_id': stay.id})
+
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 400
@@ -188,14 +239,18 @@ def get_members():
 
 @app.route('/')
 def home():
-    current_year = get_use_year(date.today())
+    current_year = datetime.now().year
     members = Member.query.all()
-    stays = Stay.query.order_by(Stay.check_in.desc()).all()
 
-    # Calculate points used for each member
-    points_used = {}
-    for member in members:
-        points_used[member.id] = calculate_points_used(member.id, current_year)
+    # Get contract to determine Use Year dates
+    contract = Contract.query.first()
+    use_year_start_month = contract.use_year_start if contract else 9  # Default to September
+
+    # Calculate important dates
+    use_year_start = date(current_year, use_year_start_month, 1)
+    use_year_end = date(current_year + 1, use_year_start_month, 1) - timedelta(days=1)
+    banking_deadline = use_year_end - timedelta(days=120)  # 4 months before end
+    next_year_start = date(current_year + 1, use_year_start_month, 1)
 
     # Get point allocations for all members
     point_allocations = {}
@@ -206,7 +261,8 @@ def home():
         regular = PointAllocation.query.filter_by(
             member_id=member.id,
             use_year=current_year,
-            is_banked=False
+            is_banked=False,
+            is_borrowed=False
         ).first()
         point_allocations[member.id][current_year]['regular'] = regular
 
@@ -218,12 +274,40 @@ def home():
         ).first()
         point_allocations[member.id][current_year]['banked'] = banked
 
+        # Get borrowed points
+        borrowed = PointAllocation.query.filter_by(
+            member_id=member.id,
+            use_year=current_year,
+            is_borrowed=True
+        ).first()
+        point_allocations[member.id][current_year]['borrowed'] = borrowed
+
+    # Calculate points used for each member
+    points_used = {}
+    for member in members:
+        points_used[member.id] = calculate_points_used(member.id, current_year)
+
+    # Get next year's available points for borrowing
+    next_year_points = {}
+    for member in members:
+        next_year_allocation = PointAllocation.query.filter_by(
+            member_id=member.id,
+            use_year=current_year + 1,
+            is_banked=False,
+            is_borrowed=False
+        ).first()
+        next_year_points[member.id] = next_year_allocation.points if next_year_allocation else 0
+
     return render_template('index.html',
                          members=members,
-                         stays=stays,
                          current_year=current_year,
+                         point_allocations=point_allocations,
                          points_used=points_used,
-                         point_allocations=point_allocations)
+                         next_year_points=next_year_points,
+                         banking_deadline=banking_deadline,
+                         use_year_end=use_year_end,
+                         next_year_start=next_year_start,
+                         now=datetime.now().date())
 
 def get_use_year(date):
     """Helper function to determine the use year for a given date.
@@ -288,101 +372,53 @@ def update_stay_status(stay_id):
 
 @app.route('/api/stays/<int:stay_id>', methods=['PUT'])
 def update_stay(stay_id):
+    data = request.get_json()
     try:
-        data = request.get_json()
         stay = Stay.query.get_or_404(stay_id)
-        old_use_year = stay.check_in.year
+        old_status = stay.status
 
-        # Store old point shares before updating
-        old_point_shares = {
-            member_share.member_id: member_share.points_share
-            for member_share in StayMember.query.filter_by(stay_id=stay_id).all()
-        }
+        # Update basic stay info
+        stay.resort = data['resort']
+        stay.check_in = datetime.strptime(data['check_in'], '%Y-%m-%d')
+        stay.check_out = datetime.strptime(data['check_out'], '%Y-%m-%d')
+        stay.points_cost = data['points_cost']
 
-        # Update basic stay information
-        stay.resort = data.get('resort', stay.resort)
-        stay.room_type = data.get('room_type', stay.room_type)
-        stay.check_in = datetime.strptime(data['check_in'], '%Y-%m-%d').date()
-        stay.check_out = datetime.strptime(data['check_out'], '%Y-%m-%d').date()
-        stay.points_cost = data.get('points_cost', stay.points_cost)
-        stay.status = data.get('status', stay.status)
+        # Validate total points
+        total_points = sum(m['points_share'] for m in data['members'])
+        if total_points != data['points_cost']:
+            raise ValueError("Total point shares must equal stay cost")
 
-        new_use_year = stay.check_in.year
-
-        # Delete existing member shares
+        # Update member shares
         StayMember.query.filter_by(stay_id=stay_id).delete()
-
-        # Add new member shares
-        for member_data in data.get('members', []):
-            member_id = member_data['member_id']
-            points = member_data['points_share']
-
-            # Return old points to member's allocation if use year hasn't changed
-            if member_id in old_point_shares and old_use_year == new_use_year:
-                old_points = old_point_shares[member_id]
-                allocation = PointAllocation.query.filter_by(
-                    member_id=member_id,
-                    use_year=old_use_year,
-                    is_banked=False
-                ).first()
-
-                if allocation:
-                    allocation.points += old_points  # Return old points
-                    allocation.points -= points      # Deduct new points
-
-            # If use year changed, handle both years
-            elif member_id in old_point_shares:
-                # Return points to old year
-                old_allocation = PointAllocation.query.filter_by(
-                    member_id=member_id,
-                    use_year=old_use_year,
-                    is_banked=False
-                ).first()
-                if old_allocation:
-                    old_allocation.points += old_point_shares[member_id]
-
-                # Deduct from new year
-                new_allocation = PointAllocation.query.filter_by(
-                    member_id=member_id,
-                    use_year=new_use_year,
-                    is_banked=False
-                ).first()
-                if new_allocation:
-                    new_allocation.points -= points
-
-            # If this is a new member share, just deduct new points
-            else:
-                allocation = PointAllocation.query.filter_by(
-                    member_id=member_id,
-                    use_year=new_use_year,
-                    is_banked=False
-                ).first()
-                if allocation:
-                    allocation.points -= points
-
-            # Create new stay member record
-            stay_member = StayMember(
+        for member_data in data['members']:
+            member_share = StayMember(
                 stay_id=stay_id,
-                member_id=member_id,
-                points_share=points
+                member_id=member_data['member_id'],
+                points_share=member_data['points_share']
             )
-            db.session.add(stay_member)
+            db.session.add(member_share)
 
-        # Log the update
-        log = ActivityLog(
-            action_type='stay_updated',
-            description=f'Updated stay at {stay.resort} ({stay.check_in} to {stay.check_out})',
-            timestamp=datetime.now()
-        )
-        db.session.add(log)
+        # Update guests
+        StayGuest.query.filter_by(stay_id=stay_id).delete()
+        for guest_id in data.get('guests', []):
+            stay_guest = StayGuest(
+                stay_id=stay_id,
+                guest_id=guest_id
+            )
+            db.session.add(stay_guest)
+
+        # Handle status change
+        new_status = data.get('status', 'Planned')
+        if new_status != old_status:
+            stay.update_status(new_status)
 
         db.session.commit()
         return jsonify({'message': 'Stay updated successfully'})
 
     except Exception as e:
         db.session.rollback()
-        print(f"Error updating stay: {str(e)}")  # Add debugging output
-        return jsonify({'error': str(e)}), 500
+        print(f"Error updating stay: {str(e)}")
+        return jsonify({'error': str(e)}), 400
 
 @app.route('/bank_points/<int:member_id>/<int:use_year>', methods=['GET', 'POST'])
 def bank_points(member_id, use_year):
@@ -608,214 +644,78 @@ def get_stay(stay_id):
 
 @app.route('/stays/new', methods=['GET', 'POST'])
 def new_stay():
-    if request.method == 'POST':
-        try:
-            print("Form data received:", request.form)  # Debug print
+    if request.method == 'GET':
+        members = Member.query.all()
+        guests = AdditionalGuest.query.all()
+        return render_template('new_stay.html',
+                            members=members,
+                            guests=guests)
 
-            # Create new stay
-            stay = Stay(
-                resort=request.form['resort'],
-                check_in=datetime.strptime(request.form['check_in'], '%Y-%m-%d'),
-                check_out=datetime.strptime(request.form['check_out'], '%Y-%m-%d'),
-                points_cost=int(request.form['points_cost']),
-                status=request.form['status']
-            )
-            db.session.add(stay)
-            db.session.flush()  # Get the stay ID
+    # Handle POST request
+    data = request.get_json()
+    try:
+        # Create the stay
+        stay = Stay(
+            resort=data['resort'],
+            check_in=datetime.strptime(data['check_in'], '%Y-%m-%d'),
+            check_out=datetime.strptime(data['check_out'], '%Y-%m-%d'),
+            points_cost=data['points_cost'],
+            status=data.get('status', 'Planned')  # Default to Planned if not specified
+        )
+        db.session.add(stay)
+        db.session.flush()  # This gets us the stay.id
 
-            # Handle member point shares
-            user_ids = request.form.getlist('user_ids[]')
-            point_shares = request.form.getlist('point_shares[]')
+        # Validate total points
+        total_points = sum(m['points_share'] for m in data['members'])
+        if total_points != data['points_cost']:
+            raise ValueError("Total point shares must equal stay cost")
 
-            for i, user_id in enumerate(user_ids):
-                if not user_id.startswith('member_'):
-                    continue
-                member_id = int(user_id.replace('member_', ''))
-                points = int(point_shares[i])
-                if points > 0:
-                    stay_member = StayMember(
-                        stay_id=stay.id,
-                        member_id=member_id,
-                        points_share=points
-                    )
-                    db.session.add(stay_member)
-
-            # Handle guest point shares
-            guest_data = {}
-            for key, value in request.form.items():
-                if key.startswith('guest_points['):
-                    match = re.match(r'guest_points\[(\d+)\]\[(\d+)\]', key)
-                    if match and int(value) > 0:  # Only process non-zero points
-                        guest_id = int(match.group(1))
-                        member_id = int(match.group(2))
-
-                        if guest_id not in guest_data:
-                            guest_data[guest_id] = {}
-                        guest_data[guest_id][member_id] = int(value)
-
-            # Create StayGuest and GuestPoints entries
-            for guest_id, member_points in guest_data.items():
-                if any(points > 0 for points in member_points.values()):
-                    # Add the guest to the stay
-                    stay_guest = StayGuest(
-                        stay_id=stay.id,
-                        guest_id=guest_id
-                    )
-                    db.session.add(stay_guest)
-                    db.session.flush()  # Get the stay_guest ID
-
-                    # Add the point allocations for each member
-                    for member_id, points in member_points.items():
-                        if points > 0:
-                            guest_points = GuestPoints(
-                                stay_guest_id=stay_guest.id,
-                                member_id=member_id,
-                                points=points
-                            )
-                            db.session.add(guest_points)
-
-                    # Also add the guest to the stay's additional_guests relationship
-                    guest = AdditionalGuest.query.get(guest_id)
-                    if guest not in stay.additional_guests:
-                        stay.additional_guests.append(guest)
-
-            # Log the activity
-            log_entry = ActivityLog(
-                action_type='create_stay',
-                description=f'Created stay at {stay.resort}',
+        # Add member shares
+        for member_data in data['members']:
+            member_share = StayMember(
                 stay_id=stay.id,
-                timestamp=datetime.now()
+                member_id=member_data['member_id'],
+                points_share=member_data['points_share']
             )
-            db.session.add(log_entry)
+            db.session.add(member_share)
 
-            db.session.commit()
-            flash('Stay created successfully', 'success')
-            return redirect(url_for('home'))
+        # Add guests if any
+        for guest_id in data.get('guests', []):
+            stay_guest = StayGuest(
+                stay_id=stay.id,
+                guest_id=guest_id
+            )
+            db.session.add(stay_guest)
 
-        except Exception as e:
-            db.session.rollback()
-            flash(f'Error creating stay: {str(e)}', 'error')
-            print(f"Error details: {str(e)}")  # Debug print
-            return redirect(url_for('home'))
+        # If status is Booked, deduct points
+        if stay.status == 'Booked':
+            stay.update_status('Booked')
 
-    # GET request - show the form
-    members = Member.query.all()
-    additional_guests = AdditionalGuest.query.all()
-    return render_template('stay_form.html',
-                         stay=None,
-                         members=members,
-                         additional_guests=additional_guests,
-                         stay_members={},
-                         stay_guests={},
-                         guest_points={})
+        # Log the activity
+        log = ActivityLog(
+            action_type='stay_created',
+            description=f'Stay created at {stay.resort}',
+            timestamp=datetime.now()
+        )
+        db.session.add(log)
 
-@app.route('/stays/<int:stay_id>/edit', methods=['GET', 'POST'])
+        db.session.commit()
+        return jsonify({'message': 'Stay created successfully'})
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error creating stay: {str(e)}")
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/stays/<int:stay_id>/edit', methods=['GET'])
 def edit_stay(stay_id):
     stay = Stay.query.get_or_404(stay_id)
-
-    if request.method == 'POST':
-        try:
-            # Update stay details
-            stay.resort = request.form['resort']
-            stay.check_in = datetime.strptime(request.form['check_in'], '%Y-%m-%d')
-            stay.check_out = datetime.strptime(request.form['check_out'], '%Y-%m-%d')
-            stay.points_cost = int(request.form['points_cost'])
-            stay.status = request.form['status']
-
-            # Clear existing relationships
-            StayMember.query.filter_by(stay_id=stay_id).delete()
-            StayGuest.query.filter_by(stay_id=stay_id).delete()
-
-            # Handle member point shares
-            user_ids = request.form.getlist('user_ids[]')
-            point_shares = request.form.getlist('point_shares[]')
-
-            for i, user_id in enumerate(user_ids):
-                if not user_id.startswith('member_'):
-                    continue
-                member_id = int(user_id.replace('member_', ''))
-                points = int(point_shares[i])
-                if points > 0:
-                    stay_member = StayMember(
-                        stay_id=stay_id,
-                        member_id=member_id,
-                        points_share=points
-                    )
-                    db.session.add(stay_member)
-
-            # Handle guest point shares
-            for key in request.form:
-                if key.startswith('guest_points['):
-                    match = re.match(r'guest_points\[(\d+)\]\[(\d+)\]', key)
-                    if match:
-                        guest_id = int(match.group(1))
-                        member_id = int(match.group(2))
-                        points = int(request.form[key])
-
-                        if points > 0:
-                            stay_guest = StayGuest(
-                                stay_id=stay_id,
-                                guest_id=guest_id
-                            )
-                            db.session.add(stay_guest)
-                            db.session.flush()
-
-                            guest_points = GuestPoints(
-                                stay_guest_id=stay_guest.id,
-                                member_id=member_id,
-                                points=points
-                            )
-                            db.session.add(guest_points)
-
-            # Log the activity
-            log_entry = ActivityLog(
-                action_type='update_stay',
-                description=f'Updated stay at {stay.resort}',
-                stay_id=stay_id,
-                timestamp=datetime.now()
-            )
-            db.session.add(log_entry)
-
-            db.session.commit()
-            flash('Stay updated successfully', 'success')
-            return redirect(url_for('home'))
-
-        except Exception as e:
-            db.session.rollback()
-            flash(f'Error updating stay: {str(e)}', 'error')
-            return redirect(url_for('home'))
-
-    # Prepare data for the form
     members = Member.query.all()
-    additional_guests = AdditionalGuest.query.all()
-
-    # Get existing member point shares
-    stay_members = {sm.member_id: sm.points_share for sm in stay.stay_members}
-
-    # Get existing guest data
-    stay_guests = {}
-    guest_points = {}
-
-    for stay_guest in stay.stay_guests:
-        stay_guests[stay_guest.guest_id] = True
-        guest_points[stay_guest.guest_id] = {}
-
-        for member_point in stay_guest.member_points:
-            guest_points[stay_guest.guest_id][member_point.member_id] = member_point.points
-
-    print("Debug - Stay:", stay.resort)
-    print("Debug - Stay Members:", stay_members)
-    print("Debug - Stay Guests:", stay_guests)
-    print("Debug - Guest Points:", guest_points)
-    print("Debug - Additional Guests:", [g.name for g in stay.additional_guests])
-
-    return render_template('stay_form.html',
+    guests = AdditionalGuest.query.all()
+    return render_template('edit_stay.html',
                          stay=stay,
                          members=members,
-                         additional_guests=additional_guests,
-                         stay_members=stay_members,
-                         stay_guests=stay_guests,
-                         guest_points=guest_points)
+                         guests=guests)
 
 class StayGuest(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -860,48 +760,66 @@ def calculate_points_used(member_id, year):
     return total_points
 
 def init_db():
-    with app.app_context():
-        # Create all tables
-        db.drop_all()
-        db.create_all()
+    db.drop_all()
+    db.create_all()
 
-        # Create contract
-        contract = Contract(use_year_start=9, total_points=230)  # September, 230 points
-        db.session.add(contract)
+    # Create contract
+    contract = Contract(use_year_start=9, total_points=230)  # September start, 230 points
+    db.session.add(contract)
+    db.session.commit()  # Commit contract first
 
-        # Create family members
-        brian = Member(name='Brian')
-        rachel = Member(name='Rachel')
-        parents = Member(name='Parents')
-        db.session.add_all([brian, rachel, parents])
-        db.session.flush()  # Generate IDs
+    # Create members
+    members = [
+        Member(name='Brandon'),
+        Member(name='Stephanie')
+    ]
+    for member in members:
+        db.session.add(member)
+    db.session.commit()  # Commit members to get their IDs
 
-        current_year = get_use_year(date.today())
+    # Create initial point allocations for current year
+    current_year = datetime.now().year
+    for member in members:
+        allocation = PointAllocation(
+            member_id=member.id,  # Now member.id will be available
+            origin_year=current_year,
+            use_year=current_year,
+            points=152,
+            is_banked=False,
+            is_borrowed=False,
+            banking_deadline=date(current_year, 5, 31)  # Example deadline
+        )
+        db.session.add(allocation)
+    db.session.commit()  # Commit allocations
 
-        # Create point allocations for current use year
-        # Regular points
-        allocations = [
-            PointAllocation(member_id=brian.id, use_year=current_year, points=77, is_banked=False),
-            PointAllocation(member_id=rachel.id, use_year=current_year, points=77, is_banked=False),
-            PointAllocation(member_id=parents.id, use_year=current_year, points=76, is_banked=False),
-        ]
+    # Create some test stays
+    stay = Stay(
+        resort='Disney\'s Beach Club Villas',
+        check_in=date(2024, 6, 1),
+        check_out=date(2024, 6, 8),
+        points_cost=100,
+        status='planned'
+    )
+    db.session.add(stay)
+    db.session.commit()  # Commit stay to get ID
 
-        # Banked points from previous year
-        banked_allocations = [
-            PointAllocation(member_id=brian.id, use_year=current_year, points=75, is_banked=True),
-            PointAllocation(member_id=rachel.id, use_year=current_year, points=75, is_banked=True),
-            PointAllocation(member_id=parents.id, use_year=current_year, points=76, is_banked=True),
-        ]
+    # Add stay members
+    stay_member = StayMember(
+        stay_id=stay.id,
+        member_id=members[0].id,
+        points_share=100
+    )
+    db.session.add(stay_member)
 
-        db.session.add_all(allocations)
-        db.session.add_all(banked_allocations)
-        db.session.commit()
+    # Create some additional guests
+    guests = [
+        AdditionalGuest(name='John Doe'),
+        AdditionalGuest(name='Jane Smith')
+    ]
+    for guest in guests:
+        db.session.add(guest)
 
-        # Create some sample additional guests
-        grammy = AdditionalGuest(name='Grammy')
-        aunt_jane = AdditionalGuest(name='Aunt Jane')
-        db.session.add_all([grammy, aunt_jane])
-        db.session.commit()
+    db.session.commit()  # Final commit for remaining objects
 
 @app.route('/point-sharing')
 def view_loans():
@@ -1221,10 +1139,61 @@ class PointShare(db.Model):
     def __repr__(self):
         return f'<PointShare {self.points} points from {self.lender_id} to {self.borrower_id}>'
 
-if __name__ == '__main__':
-    # Delete the database file if it exists
-    if os.path.exists('dvc_points.db'):
-        os.remove('dvc_points.db')
+@app.route('/borrow_points/<int:member_id>/<int:use_year>', methods=['POST'])
+def borrow_points(member_id, use_year):
+    try:
+        points = int(request.form['points_to_borrow'])
+        member = Member.query.get_or_404(member_id)
 
-    init_db()  # Initialize database with test data
-    app.run(debug=True)  # Added debug=True to see any errors
+        # Get next year's allocation
+        next_year = use_year + 1
+        future_allocation = PointAllocation.query.filter_by(
+            member_id=member_id,
+            use_year=next_year,
+            is_banked=False,
+            is_borrowed=False
+        ).first()
+
+        if not future_allocation or future_allocation.points < points:
+            flash('Insufficient points available to borrow', 'error')
+            return redirect(url_for('home'))
+
+        # Create borrowed points allocation
+        borrowed_allocation = PointAllocation(
+            member_id=member_id,
+            origin_year=next_year,
+            use_year=use_year,
+            points=points,
+            is_banked=False,
+            is_borrowed=True
+        )
+        db.session.add(borrowed_allocation)
+
+        # Deduct from future year's points
+        future_allocation.points -= points
+
+        # Log the activity
+        log_entry = ActivityLog(
+            action_type='points_borrowed',
+            description=f'{member.name} borrowed {points} points from {next_year} to use in {use_year}',
+            member1_id=member_id
+        )
+        db.session.add(log_entry)
+        db.session.commit()
+
+        flash(f'Successfully borrowed {points} points from {next_year}', 'success')
+        return redirect(url_for('home'))
+
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error borrowing points: {str(e)}', 'error')
+        return redirect(url_for('home'))
+
+if __name__ == '__main__':
+    with app.app_context():
+    # Delete the database file if it exists
+        if os.path.exists('dvc_points.db'):
+            os.remove('dvc_points.db')
+
+        init_db()  # Initialize database with test data
+        app.run(debug=True)  # Added debug=True to see any errors
