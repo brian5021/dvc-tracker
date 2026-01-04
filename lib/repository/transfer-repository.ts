@@ -9,17 +9,25 @@ export class TransferRepository {
    */
   async getAll(): Promise<PointTransfer[]> {
     try {
+      console.log("[v0] TransferRepository.getAll - Starting")
+      console.log("[v0] Redis client:", !!redis)
+      console.log("[v0] KEYS.TRANSFERS:", KEYS.TRANSFERS)
+
       // First check if the key exists
       const exists = await redis.exists(KEYS.TRANSFERS)
+      console.log("[v0] Key exists:", exists)
 
       if (!exists) {
+        console.log("[v0] Initializing with default transfers")
         // Initialize the data in Redis
         await redis.set(KEYS.TRANSFERS, DEFAULT_TRANSFERS)
         return DEFAULT_TRANSFERS
       }
 
       // If the key exists, get the data
+      console.log("[v0] Fetching transfers from Redis")
       const data = await redis.get(KEYS.TRANSFERS)
+      console.log("[v0] Data fetched:", !!data)
 
       // Check if data is valid
       if (!data) {
@@ -28,7 +36,9 @@ export class TransferRepository {
 
       return data as PointTransfer[]
     } catch (error) {
-      console.error("Error getting transfers:", error)
+      console.error("[v0] Error getting transfers:", error)
+      console.error("[v0] Error details:", error instanceof Error ? error.message : String(error))
+      console.error("[v0] Error stack:", error instanceof Error ? error.stack : "No stack")
       // Return default data in case of error
       return DEFAULT_TRANSFERS
     }
@@ -52,7 +62,7 @@ export class TransferRepository {
   async add(transfer: PointTransfer): Promise<PointTransfer> {
     const transfers = await this.getAll()
     const updatedTransfers = [...transfers, transfer]
-    await redis.set(KEYS.TRANSFERS, updatedTransfers)
+    await redis.set(KEYS.TRANSFERS, JSON.stringify(updatedTransfers))
     return transfer
   }
 
@@ -71,7 +81,7 @@ export class TransferRepository {
       }
 
       transfers[index] = transfer
-      await redis.set(KEYS.TRANSFERS, transfers)
+      await redis.set(KEYS.TRANSFERS, JSON.stringify(transfers))
       return true
     } catch (error) {
       console.error("Error updating transfer:", error)
@@ -87,7 +97,7 @@ export class TransferRepository {
     try {
       const logs = (await redis.get(KEYS.TRANSFER_LOGS)) || []
       logs.push(logEntry)
-      await redis.set(KEYS.TRANSFER_LOGS, logs)
+      await redis.set(KEYS.TRANSFER_LOGS, JSON.stringify(logs))
     } catch (error) {
       console.error("Error logging transfer action:", error)
       // Don't throw - logging should not block the main operation
@@ -100,7 +110,8 @@ export class TransferRepository {
    */
   async getLogs(): Promise<TransferLogEntry[]> {
     try {
-      return (await redis.get(KEYS.TRANSFER_LOGS)) || []
+      const logs = await redis.get(KEYS.TRANSFER_LOGS)
+      return logs ? JSON.parse(logs) : []
     } catch (error) {
       console.error("Error getting transfer logs:", error)
       return []

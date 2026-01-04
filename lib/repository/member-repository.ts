@@ -10,17 +10,25 @@ export class MemberRepository {
    */
   async getAll(): Promise<MemberPoints[]> {
     try {
+      console.log("[v0] MemberRepository.getAll - Starting")
+      console.log("[v0] Redis client:", !!redis)
+      console.log("[v0] KEYS.MEMBER_POINTS:", KEYS.MEMBER_POINTS)
+
       // First check if the key exists
       const exists = await redis.exists(KEYS.MEMBER_POINTS)
+      console.log("[v0] Key exists:", exists)
 
       if (!exists) {
+        console.log("[v0] Initializing with default member points")
         // Initialize the data in Redis
         await redis.set(KEYS.MEMBER_POINTS, DEFAULT_MEMBER_POINTS)
         return DEFAULT_MEMBER_POINTS
       }
 
       // If the key exists, get the data
+      console.log("[v0] Fetching member points from Redis")
       const data = await redis.get(KEYS.MEMBER_POINTS)
+      console.log("[v0] Data fetched:", !!data)
 
       // Check if data is valid
       if (!data) {
@@ -29,7 +37,9 @@ export class MemberRepository {
 
       return data as MemberPoints[]
     } catch (error) {
-      console.error("Error getting member points:", error)
+      console.error("[v0] Error getting member points:", error)
+      console.error("[v0] Error details:", error instanceof Error ? error.message : String(error))
+      console.error("[v0] Error stack:", error instanceof Error ? error.stack : "No stack")
       // Return default data in case of error
       return DEFAULT_MEMBER_POINTS
     }
