@@ -99,4 +99,3 @@ export const DEFAULT_POINTS_DATABASE = {
   },
   borrowings: [],
 }
-

@@ -59,4 +59,3 @@ export function DatabaseInitializer({ visible = false }: { visible?: boolean }) 
     </Button>
   )
 }
-

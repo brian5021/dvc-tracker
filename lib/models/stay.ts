@@ -34,4 +34,3 @@ export interface StayLogEntry {
   timestamp: number
   previousState?: Stay
 }
-

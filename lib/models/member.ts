@@ -15,4 +15,3 @@ export interface MemberPoints {
   bankingDeadline?: string // Date by which points must be banked (April 30)
   expirationDate?: string // Date by which points expire if not used (August 31)
 }
-

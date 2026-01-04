@@ -361,4 +361,3 @@ export function PointBanking() {
     </div>
   )
 }
-

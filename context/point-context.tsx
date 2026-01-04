@@ -121,4 +121,3 @@ export function PointProvider({ children }: { children: React.ReactNode }) {
     </PointContext.Provider>
   )
 }
-

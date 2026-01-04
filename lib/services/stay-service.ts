@@ -410,4 +410,3 @@ export class StayService {
     }
   }
 }
-

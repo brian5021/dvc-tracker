@@ -31,4 +31,3 @@ export interface TransferLogEntry {
   timestamp: number
   previousStatus?: string
 }
-

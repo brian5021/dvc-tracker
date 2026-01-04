@@ -68,4 +68,3 @@ export function daysUntil(targetDate: string): number {
   const diffTime = target.getTime() - today.getTime()
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24))
 }
-

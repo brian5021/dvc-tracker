@@ -1054,4 +1054,3 @@ export async function getTransferLogs(): Promise<any[]> {
     return []
   }
 }
-

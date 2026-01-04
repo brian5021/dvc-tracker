@@ -59,4 +59,3 @@ export function SecretAdmin() {
     </div>
   )
 }
-

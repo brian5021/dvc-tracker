@@ -9,4 +9,3 @@ export const redis = new Redis({
   automaticDeserialization: true,
   enableAutoPipelining: false, // Disable auto pipelining to avoid 405 errors
 })
-

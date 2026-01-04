@@ -34,4 +34,3 @@ export function createErrorResult<T extends { success: boolean; message: string;
     error: error instanceof Error ? error.message : String(error),
   } as T
 }
-

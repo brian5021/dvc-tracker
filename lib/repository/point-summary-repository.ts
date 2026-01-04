@@ -37,4 +37,3 @@ export class PointSummaryRepository {
     console.log("PointSummaryRepository.update is deprecated and has no effect")
   }
 }
-

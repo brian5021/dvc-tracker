@@ -155,4 +155,3 @@ export interface PointsDatabase {
   bankedPoints: BankedPointsData
   borrowings: BorrowingTransaction[]
 }
-

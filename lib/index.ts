@@ -93,4 +93,3 @@ export async function processExpiredPoints() {
 export async function initializeDatabase() {
   return databaseRepository.initialize()
 }
-

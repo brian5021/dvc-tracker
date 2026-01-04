@@ -80,4 +80,3 @@ export interface ExpirationResult {
   pointsExpired: number
   error?: string
 }
-
